@@ -1,0 +1,29 @@
+{
+  "ash_quint": 1,
+  "models": {
+    "test/fixtures/case/ok/model.qnt": "sha256:d9900fec1e77fb88b6cdd30b8763144aa9ec8a40dbe73b1b2262e26ba99cf80f"
+  },
+  "quint": "0.33.1",
+  "seed": 7,
+  "traces": [
+    {
+      "actions": {
+        "Inc": 2,
+        "Reset": 1
+      },
+      "file": "random_0.itf.json",
+      "name": "0",
+      "source": "random",
+      "steps": 3
+    },
+    {
+      "actions": {
+        "Inc": 1
+      },
+      "file": "scenario_incTest.itf.json",
+      "name": "incTest",
+      "source": "scenario",
+      "steps": 1
+    }
+  ]
+}

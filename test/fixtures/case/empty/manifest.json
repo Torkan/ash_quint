@@ -1,0 +1,9 @@
+{
+  "ash_quint": 1,
+  "models": {
+    "test/fixtures/case/empty/model.qnt": "sha256:d9900fec1e77fb88b6cdd30b8763144aa9ec8a40dbe73b1b2262e26ba99cf80f"
+  },
+  "quint": "0.33.1",
+  "seed": 7,
+  "traces": []
+}
