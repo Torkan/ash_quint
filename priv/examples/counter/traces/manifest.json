@@ -1,0 +1,103 @@
+{
+  "ash_quint": 1,
+  "models": {
+    "priv/examples/counter/model-tests.qnt": "sha256:9e9628d2abd708ad7601f1863db2ddc3d2c477b7e6667e139da40a7eb383acbc",
+    "priv/examples/counter/model.qnt": "sha256:89fc19fbb313282b47b315f76398d3b136a0a9dc36cbfae0f664accdc2ffc512"
+  },
+  "quint": "0.33.1",
+  "seed": 20261102,
+  "traces": [
+    {
+      "actions": {
+        "Inc": 2,
+        "Peek": 7,
+        "Reset": 1
+      },
+      "file": "random_0.itf.json",
+      "name": "0",
+      "source": "random",
+      "steps": 10
+    },
+    {
+      "actions": {
+        "Inc": 4,
+        "Peek": 4,
+        "Reset": 2
+      },
+      "file": "random_1.itf.json",
+      "name": "1",
+      "source": "random",
+      "steps": 10
+    },
+    {
+      "actions": {
+        "Inc": 4,
+        "Peek": 3,
+        "Reset": 3
+      },
+      "file": "random_2.itf.json",
+      "name": "2",
+      "source": "random",
+      "steps": 10
+    },
+    {
+      "actions": {
+        "Inc": 3,
+        "Peek": 5,
+        "Reset": 2
+      },
+      "file": "random_3.itf.json",
+      "name": "3",
+      "source": "random",
+      "steps": 10
+    },
+    {
+      "actions": {
+        "Inc": 1
+      },
+      "file": "scenario_incTest.itf.json",
+      "name": "incTest",
+      "source": "scenario",
+      "steps": 1
+    },
+    {
+      "actions": {
+        "Inc": 2
+      },
+      "file": "scenario_overLimitTest.itf.json",
+      "name": "overLimitTest",
+      "source": "scenario",
+      "steps": 2
+    },
+    {
+      "actions": {
+        "Inc": 1,
+        "Reset": 1
+      },
+      "file": "scenario_resetTest.itf.json",
+      "name": "resetTest",
+      "source": "scenario",
+      "steps": 2
+    },
+    {
+      "actions": {
+        "Inc": 3
+      },
+      "file": "witness_witOverLimit.itf.json",
+      "name": "witOverLimit",
+      "source": "witness",
+      "steps": 3
+    },
+    {
+      "actions": {
+        "Inc": 3,
+        "Peek": 1,
+        "Reset": 1
+      },
+      "file": "witness_witResetAfterInc.itf.json",
+      "name": "witResetAfterInc",
+      "source": "witness",
+      "steps": 5
+    }
+  ]
+}
