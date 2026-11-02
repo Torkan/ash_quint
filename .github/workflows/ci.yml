@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  MIX_ENV: test
+
+jobs:
+  checks:
+    name: checks (Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.17"
+            otp: "27"
+          - elixir: "1.20"
+            otp: "29"
+            latest: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            priv/plts
+          key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-
+      - run: mix deps.get
+      - run: mix format --check-formatted
+        if: matrix.latest
+      - run: mix credo --strict
+      - run: mix compile --force --warnings-as-errors
+      - run: mix test
+      - run: mix dialyzer
+        if: matrix.latest
+      - run: mix docs
+        if: matrix.latest
+        env:
+          MIX_ENV: dev
+
+  quint:
+    name: quint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-quint-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-quint-
+      - run: mix deps.get
+      - run: mix test --only quint_cli
+      - run: mix ash_quint.gen --check
+
+  without-ash:
+    name: compile without Ash
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+      # A project that depends on ash_quint by path, without Ash. Mix doesn't
+      # pass --warnings-as-errors to dependencies, so the log is checked too.
+      - shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          ASH_QUINT: ${{ github.workspace }}
+        run: |
+          mkdir no_ash && cd no_ash
+          echo 'defmodule NoAsh.MixProject do use Mix.Project; def project, do: [app: :no_ash, version: "0.1.0", deps: [{:ash_quint, path: System.fetch_env!("ASH_QUINT")}]] end' > mix.exs
+          mix deps.get
+          mix compile --warnings-as-errors 2>&1 | tee compile.log
+          if grep -q "warning:" compile.log; then exit 1; fi
+          test ! -e _build/dev/lib/ash_quint/ebin/Elixir.AshQuint.Ash.beam
