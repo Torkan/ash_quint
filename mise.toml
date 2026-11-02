@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 ash_magistrate contributors
+#
+# SPDX-License-Identifier: MIT
+
+[tools]
+elixir = "1.20.4-otp-29"
+erlang = "29.0.6"
+python = "3.13"
+pipx = "1.16.7"
+
+[env]
+CLAUDE_CODE_SUBAGENT_MODEL = "opus"
