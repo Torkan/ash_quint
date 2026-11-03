@@ -27,7 +27,9 @@ defmodule AshQuint.Sensitivity do
   Every mutant replays with a fresh `init/2`, so fresh `AshQuint.Names`, in
   the caller's process and sandbox, one after another. The adapter's
   `project/1` must therefore be scoped to its own trace (see
-  `AshQuint.Adapter`). A mutant that raises counts as detected.
+  `AshQuint.Adapter`), and an adapter that holds resources should release
+  them in `finish/2`, which every clean and mutant replay calls. A mutant
+  that raises counts as detected.
 
   `use AshQuint.Case, sensitivity: true` runs the check as a test.
   """

@@ -102,6 +102,56 @@ defmodule AshQuint.ReplayTest do
     defdelegate outcome(result), to: ToyAdapter
   end
 
+  defmodule Finishing do
+    @moduledoc false
+    # The toy adapter with a finish/2 that sends {:finished, ctx, result} to
+    # the test and returns opts[:finish] (default :ok; :raise raises).
+    # ctx.steps counts step/2 calls. opts[:raise]: {:step, n} raises in the
+    # n-th step/2 call, {:project, n} in project/1 after n calls, and
+    # {:throw, n} throws from the n-th step/2 call.
+    use AshQuint.Adapter
+
+    @impl true
+    def init(trace, opts) do
+      {:ok, ctx} = ToyAdapter.init(trace, opts)
+
+      {:ok,
+       Map.merge(ctx, %{
+         test: Keyword.fetch!(opts, :test),
+         finish: Keyword.get(opts, :finish, :ok),
+         raise: Keyword.get(opts, :raise),
+         steps: 0
+       })}
+    end
+
+    @impl true
+    def step(ctx, step) do
+      ctx = %{ctx | steps: ctx.steps + 1}
+
+      case ctx.raise do
+        {:step, n} when n == ctx.steps -> raise "step blew up"
+        {:throw, n} when n == ctx.steps -> throw(:thrown)
+        _other -> ToyAdapter.step(ctx, step)
+      end
+    end
+
+    @impl true
+    def project(%{raise: {:project, n}, steps: n}), do: raise("no connection")
+    def project(ctx), do: ToyAdapter.project(ctx)
+
+    @impl true
+    defdelegate outcome(result), to: ToyAdapter
+
+    @impl true
+    defdelegate invariants, to: ToyAdapter
+
+    @impl true
+    def finish(ctx, result) do
+      send(ctx.test, {:finished, ctx, result})
+      if ctx.finish == :raise, do: raise("cleanup failed"), else: ctx.finish
+    end
+  end
+
   defp run(states, faults \\ [], opts \\ []) do
     {trace_opts, opts} = Keyword.split(opts, [:results])
     adapter = Keyword.get(opts, :adapter, ToyAdapter)
@@ -369,5 +419,124 @@ defmodule AshQuint.ReplayTest do
     trace = ITF.read!("test/fixtures/itf/run.itf.json")
     assert {:ok, report} = Replay.run(SkipAll, trace, model: :fixture)
     assert length(report.synced) == length(trace.states) - 1
+  end
+
+  describe "finish/2" do
+    defp finishing(states, adapter_opts \\ [], opts \\ []) do
+      Replay.run(
+        Finishing,
+        trace(states),
+        [model: :counter, adapter_opts: [test: self()] ++ adapter_opts] ++ opts
+      )
+    end
+
+    defp assert_finished_once do
+      assert_received {:finished, ctx, result}
+      refute_received {:finished, _ctx, _result}
+      {ctx, result}
+    end
+
+    test "is called once with :ok and the latest ctx after a passing replay" do
+      assert {:ok, _report} = finishing(clean())
+      assert {%{steps: 4, count: 0}, :ok} = assert_finished_once()
+    end
+
+    test "is called once with the failure after an outcome, state or invariant failure" do
+      for {fault, states} <- [
+            wrong_code: clean(),
+            off_by_one: clean(),
+            negative: [init(), inc(1, 1), reset()]
+          ] do
+        assert {:error, failure} = finishing(states, faults: [fault])
+        assert {_ctx, {:error, ^failure}} = assert_finished_once()
+      end
+    end
+
+    test "gets the ctx of a pending step when the trace ends pending" do
+      assert {:error, failure} = finishing([init(), begin(0, 2)])
+      assert failure.message =~ @interleaved
+      assert {%{pending: 2}, {:error, ^failure}} = assert_finished_once()
+    end
+
+    test "is called after a failure at step 0 and for a dropped call" do
+      assert {:error, %{index: 0} = failure} =
+               finishing([init(), inc(1, 1)], raise: {:project, 0})
+
+      assert {_ctx, {:error, ^failure}} = assert_finished_once()
+
+      assert {:error, %{index: 1} = failure} = finishing(clean(), [], mutate: {:drop, 1})
+      assert {%{steps: 0}, {:error, ^failure}} = assert_finished_once()
+    end
+
+    test "is not called when init/2 never ran" do
+      assert {:error, %{index: 0}} = finishing([inc(1, 1), inc(2, 1)])
+      refute_received {:finished, _ctx, _result}
+    end
+
+    test "is called before an exception in step/2 propagates" do
+      assert_raise RuntimeError, "step blew up", fn -> finishing(clean(), raise: {:step, 2}) end
+      assert {%{steps: 1, count: 1}, {:error, failure}} = assert_finished_once()
+
+      assert %{index: 2, action: "Inc"} = failure
+      assert failure.message == "#{@prefix} 2 (Inc), seed 7: step/2 raised: step blew up"
+    end
+
+    test "is called with the step's ctx before an exception in project/1 propagates" do
+      assert_raise RuntimeError, "no connection", fn ->
+        finishing(clean(), raise: {:project, 2})
+      end
+
+      assert {%{steps: 2, count: 3}, {:error, failure}} = assert_finished_once()
+      assert failure.message == "#{@prefix} 2 (Inc), seed 7: project/1 raised: no connection"
+    end
+
+    test "is called before a throw propagates" do
+      assert catch_throw(finishing(clean(), raise: {:throw, 1})) == :thrown
+      assert {_ctx, {:error, failure}} = assert_finished_once()
+      assert failure.message == "#{@prefix} 1 (Inc), seed 7: step/2 threw :thrown"
+    end
+
+    test "an {:error, message} fails a passing replay at the last step" do
+      assert {:error, %{index: 4, action: "Reset", message: message}} =
+               finishing(clean(), finish: {:error, "witness not reached"})
+
+      assert message == "#{@prefix} 4 (Reset), seed 7: finish/2: witness not reached"
+      assert {_ctx, :ok} = assert_finished_once()
+
+      assert {:error, %{index: 0, action: "Init"}} =
+               finishing([init()], finish: {:error, "witness not reached"})
+    end
+
+    test "a bad return value fails a passing replay" do
+      assert {:error, %{message: message}} = finishing(clean(), finish: :done)
+
+      assert message ==
+               "#{@prefix} 4 (Reset), seed 7: finish/2 returned :done; " <>
+                 "expected :ok or {:error, message}"
+    end
+
+    test "on a failing replay, the original failure is kept" do
+      assert {:error, failure} =
+               finishing(clean(), faults: [:off_by_one], finish: {:error, "ignored"})
+
+      assert failure.index == 1
+      refute failure.message =~ "ignored"
+    end
+
+    test "its own exception propagates" do
+      assert_raise RuntimeError, "cleanup failed", fn -> finishing(clean(), finish: :raise) end
+
+      assert_raise RuntimeError, "cleanup failed", fn ->
+        finishing(clean(), faults: [:off_by_one], finish: :raise)
+      end
+    end
+
+    test "an adapter exception wins over an exception from finish/2" do
+      assert_raise RuntimeError, "step blew up", fn ->
+        finishing(clean(), raise: {:step, 1}, finish: :raise)
+      end
+
+      assert {_ctx, {:error, _failure}} = assert_finished_once()
+    end
   end
 end

@@ -120,6 +120,51 @@ defmodule AshQuint.SensitivityTest do
     defdelegate outcome(result), to: ToyAdapter
   end
 
+  defmodule ResourceAdapter do
+    @moduledoc false
+    # The strict-read adapter holding resources counted in opts[:open], a
+    # :counters ref: init/2 opens one, Begin another that Commit releases,
+    # and finish/2 releases what ctx still holds. Slot 2 counts finish/2
+    # calls.
+    use AshQuint.Adapter
+
+    alias AshQuint.Step
+
+    @impl true
+    def init(trace, opts) do
+      {:ok, ctx} = StrictReadAdapter.init(trace, opts)
+      ref = Keyword.fetch!(opts, :open)
+      :counters.add(ref, 1, 1)
+      {:ok, Map.merge(ctx, %{ref: ref, held: 1})}
+    end
+
+    @impl true
+    def step(ctx, %Step{action_taken: "Begin"} = step) do
+      :counters.add(ctx.ref, 1, 1)
+      StrictReadAdapter.step(%{ctx | held: ctx.held + 1}, step)
+    end
+
+    def step(ctx, %Step{action_taken: "Commit"} = step) do
+      :counters.sub(ctx.ref, 1, 1)
+      StrictReadAdapter.step(%{ctx | held: ctx.held - 1}, step)
+    end
+
+    def step(ctx, step), do: StrictReadAdapter.step(ctx, step)
+
+    @impl true
+    defdelegate project(ctx), to: StrictReadAdapter
+
+    @impl true
+    defdelegate outcome(result), to: StrictReadAdapter
+
+    @impl true
+    def finish(ctx, _result) do
+      :counters.sub(ctx.ref, 1, ctx.held)
+      :counters.add(ctx.ref, 2, 1)
+      :ok
+    end
+  end
+
   defp check(adapter, states_list, faults \\ []) do
     traces = Enum.map(states_list, &trace/1)
     Sensitivity.check(adapter, traces, model: :counter, adapter_opts: [faults: faults])
@@ -240,6 +285,27 @@ defmodule AshQuint.SensitivityTest do
     states = [init(), begin(0, 2), commit(2)]
 
     assert %{survived: [], untested: []} = check(StrictReadAdapter, [states])
+  end
+
+  test "every clean and mutant replay is finished, releasing its resources" do
+    open = :counters.new(2, [])
+
+    traces = [
+      trace([init(), inc(1, 1), inc(3, 2), reset()]),
+      trace([init(), begin(0, 2), commit(2)])
+    ]
+
+    # Clean replays, perturbed "count" (failing), dropped Inc and Reset
+    # (failing), dropped Commit (raising in project/1).
+    assert %{survived: [], untested: [], tested: tested} =
+             Sensitivity.check(ResourceAdapter, traces,
+               model: :counter,
+               adapter_opts: [open: open]
+             )
+
+    assert length(tested) == 4
+    assert :counters.get(open, 1) == 0
+    assert :counters.get(open, 2) == length(traces) + length(tested)
   end
 
   test "failing clean replay is refused" do

@@ -19,6 +19,15 @@ defmodule AshQuint.Replay do
        reported together;
     5. a trace that ends with a step pending fails.
 
+  Once `init/2` has returned, the replay ends with the adapter's
+  `finish/2`, when it defines one, called exactly once with the latest `ctx`
+  and the result: `:ok` after the last step's checks, `{:error, failure}` at
+  the first failing step. When an adapter callback raises (or throws or
+  exits), `finish/2` gets the `ctx` that callback was given and
+  `{:error, failure}` describing the exception, and then the exception
+  propagates. An `{:error, message}` from `finish/2` fails a passing replay at
+  the last step; on a failing replay its return value is ignored.
+
   Every failure message starts with
   `<model> <source> <name>, step <index> (<action>), seed <seed>: `.
   """
@@ -55,13 +64,18 @@ defmodule AshQuint.Replay do
   returned `:ok` or `:skip` with their expected values, and
   `report.initial_expected` is the expected value of the initial state right
   after `init/2`; both keep only the projected keys. Returns
-  `{:error, failure}` at the first failing step.
+  `{:error, failure}` at the first failing step, or at the last step when
+  the adapter's `finish/2` returns `{:error, message}` (the failure message
+  then ends with `finish/2: <message>`).
 
   Exceptions raised by the adapter propagate, except that a
   `FunctionClauseError` raised by the adapter's own `step/2` is reported as
   a missing clause for the action, and an exception from `project/1` or
   `expected/2` on the initial state is reported at step 0. A missing clause
-  in a helper that `step/2` delegates to propagates as it is.
+  in a helper that `step/2` delegates to propagates as it is. `finish/2` is
+  called before an adapter exception propagates. An exception from
+  `finish/2` itself propagates, except while an adapter exception is already
+  propagating: that one is kept.
 
   ## Options
 
@@ -86,9 +100,9 @@ defmodule AshQuint.Replay do
       mutate: Keyword.get(opts, :mutate)
     }
 
-    with {:ok, ctx, initial_expected} <- start(run, Keyword.get(opts, :adapter_opts, [])),
-         {:ok, synced} <- replay(run, ctx) do
-      {:ok, %{synced: synced, initial_expected: initial_expected}}
+    with {:ok, ctx, step0} <- start(run, Keyword.get(opts, :adapter_opts, [])) do
+      {result, ctx, last} = replay_from(run, ctx, step0)
+      finish(run, ctx, last, result)
     end
   end
 
@@ -110,7 +124,7 @@ defmodule AshQuint.Replay do
     case Step.from_state(state0, 0, run.step_opts) do
       {:ok, %Step{action_taken: action} = step0} when action == run.init_action ->
         {:ok, ctx} = run.adapter.init(run.trace, adapter_opts)
-        initial_expected(run, ctx, step0)
+        {:ok, ctx, step0}
 
       {:ok, %Step{action_taken: action}} ->
         fail(run, 0, action, ["initial state's action is #{action}, expected #{run.init_action}"])
@@ -120,82 +134,120 @@ defmodule AshQuint.Replay do
     end
   end
 
+  # Returns the result with the latest ctx and the last step (for a failure
+  # from finish/2 on a passing replay).
+  defp replay_from(run, ctx, step0) do
+    with {:ok, initial_expected} <- initial_expected(run, ctx, step0),
+         {:ok, synced, ctx, last} <- replay(run, ctx, step0) do
+      {{:ok, %{synced: synced, initial_expected: initial_expected}}, ctx, last}
+    else
+      {:error, failure, ctx} -> {{:error, failure}, ctx, nil}
+    end
+  end
+
+  defp finish(run, ctx, last, result) do
+    case {result, Adapter.finish(run.adapter, ctx, finished(result))} do
+      {{:error, _failure}, _ignored} ->
+        result
+
+      {{:ok, _report}, :ok} ->
+        result
+
+      {{:ok, _report}, {:error, message}} when is_binary(message) ->
+        fail(run, last, ["finish/2: #{message}"])
+
+      {{:ok, _report}, other} ->
+        fail(run, last, [
+          "finish/2 returned #{inspect(other)}; expected :ok or {:error, message}"
+        ])
+    end
+  end
+
+  defp finished({:ok, _report}), do: :ok
+  defp finished({:error, _failure} = error), do: error
+
   defp initial_expected(run, ctx, step0) do
     with {:ok, projected} <-
-           initial(run, step0, "project/1", fn -> run.adapter.project(ctx) end),
+           initial(run, ctx, step0, "project/1", fn -> run.adapter.project(ctx) end),
          {:ok, expected} <-
-           initial(run, step0, "expected/2", fn ->
+           initial(run, ctx, step0, "expected/2", fn ->
              Adapter.expected(run.adapter, ctx, step0, projected)
            end) do
-      {:ok, ctx, Map.take(expected, Map.keys(projected))}
+      {:ok, Map.take(expected, Map.keys(projected))}
     end
   end
 
   # The initial state's project/1 and expected/2 calls have no step/2 call
   # around them, so an exception there is reported at step 0 instead of
   # propagating without the trace and seed.
-  defp initial(run, step0, callback, fun) do
-    {:ok, fun.()}
-  rescue
-    error -> fail(run, step0, ["#{callback} raised: #{Exception.message(error)}"])
+  defp initial(run, ctx, step0, callback, fun) do
+    guard(run, ctx, step0, callback, fn ->
+      try do
+        {:ok, fun.()}
+      rescue
+        error -> halt_error(run, step0, ctx, [raised(callback, :error, error, __STACKTRACE__)])
+      end
+    end)
   end
 
-  defp replay(run, ctx) do
+  defp replay(run, ctx, step0) do
     run.trace.states
     |> Enum.with_index()
     |> Enum.drop(1)
-    |> Enum.reduce_while({:ok, ctx, nil, []}, fn {state, index}, {:ok, ctx, pending, synced} ->
+    |> Enum.reduce_while({:ok, ctx, nil, [], step0}, fn {state, index},
+                                                        {:ok, ctx, pending, synced, _last} ->
       case Step.from_state(state, index, run.step_opts) do
         {:ok, step} -> step(run, step, ctx, pending, synced)
-        {:error, reason} -> {:halt, fail(run, index, "?", [reason])}
+        {:error, reason} -> halt(run, index, "?", ctx, [reason])
       end
     end)
     |> case do
-      {:ok, _ctx, nil, synced} -> {:ok, Enum.reverse(synced)}
-      {:ok, _ctx, %Step{} = open, _synced} -> fail(run, open, [@interleaved])
-      {:error, _failure} = error -> error
+      {:ok, ctx, nil, synced, last} -> {:ok, Enum.reverse(synced), ctx, last}
+      {:ok, ctx, %Step{} = open, _synced, _last} -> halt_error(run, open, ctx, [@interleaved])
+      {:error, _failure, _ctx} = error -> error
     end
   end
 
   defp step(run, step, ctx, pending, synced) do
-    case call(run, step, ctx) do
+    case guard(run, ctx, step, "step/2", fn -> call(run, step, ctx) end) do
       :no_clause ->
-        {:halt,
-         fail(run, step, [
-           "adapter #{inspect(run.adapter)} has no step/2 clause for `#{step.action_taken}`"
-         ])}
+        halt(run, step, ctx, [
+          "adapter #{inspect(run.adapter)} has no step/2 clause for `#{step.action_taken}`"
+        ])
 
       :dropped ->
         sync(run, step, :skip, [], ctx, synced)
 
       {:returned, returned} ->
-        handle(run, step, returned, pending, synced)
+        handle(run, step, ctx, returned, pending, synced)
     end
   end
 
-  defp handle(run, step, returned, pending, synced) do
+  defp handle(run, step, ctx_in, returned, pending, synced) do
     case returned do
-      {:pending, _ctx} when pending != nil ->
-        {:halt, fail(run, step, [@interleaved])}
+      {:pending, ctx} when pending != nil ->
+        halt(run, step, ctx, [@interleaved])
 
       {:pending, ctx} ->
-        {:cont, {:ok, ctx, step, synced}}
+        {:cont, {:ok, ctx, step, synced, step}}
 
-      {:skip, _ctx} when pending != nil ->
-        {:halt, fail(run, step, [@interleaved])}
+      {:skip, ctx} when pending != nil ->
+        halt(run, step, ctx, [@interleaved])
 
       {:skip, ctx} ->
         sync(run, step, :skip, [], ctx, synced)
 
       {:ok, result, ctx} ->
-        sync(run, step, :ok, outcome_errors(run.adapter, step, result), ctx, synced)
+        errors =
+          guard(run, ctx, step, "outcome/1", fn -> outcome_errors(run.adapter, step, result) end)
+
+        sync(run, step, :ok, errors, ctx, synced)
 
       other ->
-        {:halt,
-         fail(run, step, [
-           "step/2 returned #{inspect(other)}; " <>
-             "expected {:ok, result, ctx}, {:pending, ctx} or {:skip, ctx}"
-         ])}
+        halt(run, step, ctx_in, [
+          "step/2 returned #{inspect(other)}; " <>
+            "expected {:ok, result, ctx}, {:pending, ctx} or {:skip, ctx}"
+        ])
     end
   end
 
@@ -228,19 +280,57 @@ defmodule AshQuint.Replay do
   end
 
   defp sync(run, step, kind, errors, ctx, synced) do
-    projected = run.adapter.project(ctx)
-    expected = run.adapter |> Adapter.expected(ctx, step, projected) |> mutate(run, step)
-    errors = errors ++ state_errors(projected, expected) ++ invariant_errors(run, projected, ctx)
+    projected = guard(run, ctx, step, "project/1", fn -> run.adapter.project(ctx) end)
+
+    expected =
+      guard(run, ctx, step, "expected/2", fn ->
+        Adapter.expected(run.adapter, ctx, step, projected)
+      end)
+
+    expected = mutate(expected, run, step)
+
+    invariant_errors =
+      guard(run, ctx, step, "invariants/0", fn -> invariant_errors(run, projected, ctx) end)
+
+    errors = errors ++ state_errors(projected, expected) ++ invariant_errors
 
     if errors == [] do
       # Only the projected keys were compared, so only they are reported.
       expected = Map.take(expected, Map.keys(projected))
       entry = %{index: step.index, action: step.action_taken, kind: kind, expected: expected}
-      {:cont, {:ok, ctx, nil, [entry | synced]}}
+      {:cont, {:ok, ctx, nil, [entry | synced], step}}
     else
-      {:halt, fail(run, step, errors)}
+      halt(run, step, ctx, errors)
     end
   end
+
+  # Runs an adapter callback that was given ctx. If it raises, throws or
+  # exits, finish/2 gets ctx and the failure before the exception propagates.
+  # An exception from finish/2 there is dropped, so the adapter's own one is
+  # the one reported.
+  defp guard(run, ctx, step, callback, fun) do
+    fun.()
+  catch
+    kind, reason ->
+      stacktrace = __STACKTRACE__
+      result = fail(run, step, [raised(callback, kind, reason, stacktrace)])
+
+      try do
+        Adapter.finish(run.adapter, ctx, result)
+      catch
+        _kind, _reason -> :ok
+      end
+
+      :erlang.raise(kind, reason, stacktrace)
+  end
+
+  defp raised(callback, :error, reason, stacktrace) do
+    error = Exception.normalize(:error, reason, stacktrace)
+    "#{callback} raised: #{Exception.message(error)}"
+  end
+
+  defp raised(callback, :throw, value, _stacktrace), do: "#{callback} threw #{inspect(value)}"
+  defp raised(callback, :exit, reason, _stacktrace), do: "#{callback} exited: #{inspect(reason)}"
 
   defp mutate(expected, %{mutate: {:perturb, index, key}}, %Step{index: index}),
     do: Map.put(expected, key, {:ash_quint_mutated, key})
@@ -275,6 +365,19 @@ defmodule AshQuint.Replay do
     end
   rescue
     error -> "invariant #{name} raised: #{Exception.message(error)}"
+  end
+
+  defp halt(run, step, ctx, lines), do: {:halt, halt_error(run, step, ctx, lines)}
+
+  defp halt(run, index, action, ctx, lines),
+    do: {:halt, halt_error(run, index, action, ctx, lines)}
+
+  defp halt_error(run, %Step{index: index, action_taken: action}, ctx, lines),
+    do: halt_error(run, index, action, ctx, lines)
+
+  defp halt_error(run, index, action, ctx, lines) do
+    {:error, failure} = fail(run, index, action, lines)
+    {:error, failure, ctx}
   end
 
   defp fail(run, %Step{index: index, action_taken: action}, lines),
