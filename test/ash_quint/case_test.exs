@@ -244,6 +244,16 @@ defmodule AshQuint.CaseTest do
            ) == "sensitivity of :ok:\nno step of Reset changes the state"
   end
 
+  test "allow_untested accepts ~w and ~W sigils" do
+    for allowed <- [
+          "[allow_untested: [keys: ~w(limit), actions: ~w(Inc Reset)]]",
+          "[allow_untested: [keys: ~W(limit), actions: ~W(Inc Reset)s]]"
+        ] do
+      mod = compile_sensitivity(ToyAdapterConstant, allowed)
+      assert run_test(mod, "sensitivity of ok") == :ok
+    end
+  end
+
   test "stale allow_untested entries fail" do
     assert sensitivity_failure(
              ToyAdapter,
@@ -285,9 +295,18 @@ defmodule AshQuint.CaseTest do
           {"[allow_untested: [key: []]]",
            "unknown allow_untested option :key; expected keys or actions"},
           {"[allow_untested: [keys: [:count]]]",
-           "allow_untested keys must be a list of strings, got [:count]"},
+           "allow_untested keys must be a literal list of strings or a ~w sigil, got [:count]"},
           {"[allow_untested: [actions: \"Peek\"]]",
-           "allow_untested actions must be a list of strings, got \"Peek\""},
+           "allow_untested actions must be a literal list of strings or a ~w sigil, " <>
+             "got \"Peek\""},
+          {"[allow_untested: [keys: ~w(count)a]]",
+           "allow_untested keys must be a literal list of strings or a ~w sigil, " <>
+             "got ~w(count)a"},
+          {~S|[allow_untested: [keys: ~w(#{key})]]|,
+           "allow_untested keys must be a literal list of strings or a ~w sigil, " <>
+             ~S|got ~w(#{key})|},
+          {"[allow_untested: [keys: @keys]]",
+           "allow_untested keys must be a literal list of strings or a ~w sigil, got @keys"},
           {"[allow_untested: :all]",
            "allow_untested must be a keyword list of keys and actions, got :all"},
           {"[1]",

@@ -53,6 +53,8 @@ defmodule AshQuint.Case do
     * `:sensitivity` — `true`, or
       `[allow_untested: [keys: ["plans"], actions: ["Refresh"]]]` to accept
       the listed keys and actions as untested (deliberate constants, say).
+      The lists must be literal lists of strings or `~w` sigils: they're read
+      at compile time, so module attributes and variables aren't allowed.
       `true` is `[allow_untested: []]`. Default `false`.
   """
 
@@ -153,15 +155,31 @@ defmodule AshQuint.Case do
     )
   end
 
+  # The options arrive unexpanded, so a ~w or ~W sigil is still a call. Without
+  # interpolation, expanding it gives a literal list.
   defp strings!(list, name, env) do
-    if is_list(list) and Enum.all?(list, &is_binary/1) do
-      list
-    else
-      compile_error!(
-        env,
-        "allow_untested #{name} must be a list of strings, got #{Macro.to_string(list)}"
-      )
+    case expand_sigil(list, env) do
+      strings when is_list(strings) ->
+        if Enum.all?(strings, &is_binary/1), do: strings, else: strings_error!(list, name, env)
+
+      _other ->
+        strings_error!(list, name, env)
     end
+  end
+
+  defp expand_sigil({sigil, _meta, [_string, _modifiers]} = ast, env)
+       when sigil in [:sigil_w, :sigil_W],
+       do: Macro.expand(ast, env)
+
+  defp expand_sigil(other, _env), do: other
+
+  @spec strings_error!(term(), String.t(), Macro.Env.t()) :: no_return()
+  defp strings_error!(list, name, env) do
+    compile_error!(
+      env,
+      "allow_untested #{name} must be a literal list of strings or a ~w sigil, " <>
+        "got #{Macro.to_string(list)}"
+    )
   end
 
   defp required!(opts, key, env) do

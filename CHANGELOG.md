@@ -8,6 +8,8 @@
   replay holds open, which matters for the sensitivity check's failing
   mutants, and for end-of-trace checks: `{:error, message}` fails a passing
   replay at its last step.
+- `allow_untested` takes `~w(...)` and `~W(...)` sigils as well as literal
+  lists of strings.
 
 ## 0.1.0
 

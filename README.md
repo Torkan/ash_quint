@@ -415,7 +415,8 @@ use AshQuint.Case,
 action that turns out to be tested, or that the check doesn't know, also
 fails the test, so the list can't go stale. Actions that only ever return
 `{:skip, …}` make no system call and are never checked (the counter's
-`Peek`). The `sensitivity:` value must be a literal.
+`Peek`). The `sensitivity:` value must be a literal: the lists can be
+written as `~w(plans)`, but not as module attributes or variables.
 
 ## CI
 
