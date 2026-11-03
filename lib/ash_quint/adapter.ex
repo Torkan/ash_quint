@@ -8,6 +8,7 @@ defmodule AshQuint.Adapter do
   `step/2` for every state after the initial one. After each step that
   synced (`{:ok, …}` or `{:skip, …}`), it compares `project/1` with
   `expected/2` on the keys `project/1` returns, and runs `invariants/0`.
+  When the replay ends, pass or fail, it calls `finish/2`.
 
     * `init/2` builds the `ctx` for one trace. Use a map if you use
       `AshQuint.Names`.
@@ -23,6 +24,31 @@ defmodule AshQuint.Adapter do
       `:accepted`, `{:rejected, code}` or `{:failed, message}`.
     * `invariants/0` (optional) lists named checks run on every synced
       step.
+    * `finish/2` (optional) runs once when the replay ends, to release what
+      `ctx` holds and for checks that belong after the last step.
+
+  ## Finishing
+
+  `finish(ctx, result)` is called exactly once for every replay whose
+  `init/2` returned, with the latest `ctx` (including one returned with
+  `{:pending, ctx}`):
+
+    * with `:ok` after the last step, once its comparison and invariants
+      passed;
+    * with `{:error, failure}` at the first failing step, including an
+      interleaved trace and a failure at step 0;
+    * with `{:error, failure}` describing the exception when an adapter
+      callback raises, throws or exits, with the `ctx` that callback was
+      given, before the exception propagates.
+
+  Return `:ok`, or `{:error, message}` to fail a passing replay: the failure
+  is reported at the last step, as `finish/2: <message>`. That makes
+  `finish/2` the place for end-of-trace checks (a witness reached on the
+  real system). On a failing replay the original failure is kept and the
+  return value is ignored.
+
+  An exception from `finish/2` propagates, except while an adapter exception
+  is already propagating: that one is kept, and `finish/2`'s is dropped.
 
   ## Exceptions
 
@@ -45,7 +71,8 @@ defmodule AshQuint.Adapter do
       `Map.take(step.state, Map.keys(projected))`, for models whose values
       are already real;
     * `outcome/1`: as above, decided at run time (see `outcome/2`);
-    * `invariants/0`: `[]`.
+    * `invariants/0`: `[]`;
+    * `finish/2`: none; nothing is called when the replay ends.
 
   ## Scoping the projection
 
@@ -91,7 +118,11 @@ defmodule AshQuint.Adapter do
   @doc "Named checks run on the projection after every synced step."
   @callback invariants() :: [invariant()]
 
-  @optional_callbacks expected: 2, outcome: 1, invariants: 0
+  @doc "Runs once when the replay ends, with the latest `ctx` and the result."
+  @callback finish(ctx(), result :: :ok | {:error, AshQuint.Replay.failure()}) ::
+              :ok | {:error, String.t()}
+
+  @optional_callbacks expected: 2, outcome: 1, invariants: 0, finish: 2
 
   @doc false
   defmacro __using__(_opts) do
@@ -156,6 +187,15 @@ defmodule AshQuint.Adapter do
   @spec invariants(module()) :: [invariant()]
   def invariants(adapter) do
     if exports?(adapter, :invariants, 0), do: adapter.invariants(), else: []
+  end
+
+  @doc """
+  Calls `adapter.finish(ctx, result)` when the adapter defines it, else
+  returns `:ok`.
+  """
+  @spec finish(module(), ctx(), :ok | {:error, AshQuint.Replay.failure()}) :: term()
+  def finish(adapter, ctx, result) do
+    if exports?(adapter, :finish, 2), do: adapter.finish(ctx, result), else: :ok
   end
 
   defp exports?(adapter, fun, arity) do

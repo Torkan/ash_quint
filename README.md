@@ -288,6 +288,14 @@ The callbacks:
   rejection codes.
 - **`invariants()`** (optional) lists `{name, fun}` checks run after every
   synced step: `fun.(projected, ctx)` returns `:ok` or `{:error, message}`.
+- **`finish(ctx, result)`** (optional) runs exactly once when a replay
+  ends, with the latest `ctx`: with `:ok` after the last step's checks, with
+  `{:error, failure}` at the first failing step, and, when an adapter
+  callback raises, with the `ctx` that callback was given, before the
+  exception propagates. Release what `ctx` holds there. Return `:ok`, or
+  `{:error, message}` to fail a passing replay at its last step (an
+  end-of-trace check, such as a witness reached on the real system); on a
+  failing replay the original failure is kept.
 
 Two rules matter in practice:
 
@@ -295,6 +303,10 @@ Two rules matter in practice:
   trace and mutant one after another in one test, so the database holds the
   rows of earlier replays. Read only what this trace created: a tenant made
   in `init/2`, or the ids it named (the counter keeps them in `ctx.ids`).
+  For the same reason, release in `finish/2` whatever a replay holds open
+  (processes, transactions, checked-out connections, locks): mutants fail
+  partway through, and without `finish/2` what they opened stays alive
+  until the test process exits.
 - **Transition invariants go through `ctx`.** An invariant sees only the
   projection and `ctx`. One that compares a step with the one before keeps
   what it needs (the rows before the call, say) in `ctx`, from `step/2`.
@@ -356,8 +368,9 @@ counter random 3, step 4 (Inc), seed 20261102: outcome: expected :accepted, got 
 The problems are an outcome mismatch, a failed system call
 (`{:failed, message}`), a missing `step/2` clause, a bad return value, a
 projected key that differs from the model (or has no expected value), a
-failing invariant, an interleaved trace, and an exception from `project/1`
-or `expected/2` on the initial state (at step 0). Other exceptions from the
+failing invariant, an interleaved trace, an exception from `project/1`
+or `expected/2` on the initial state (at step 0), and an `{:error, message}`
+from `finish/2` (at the last step). Other exceptions from the
 adapter propagate as they are, without the prefix. That includes a missing
 clause in a helper that `step/2` delegates to: only a `FunctionClauseError`
 from the adapter's own `step/2` is reported as a missing clause.

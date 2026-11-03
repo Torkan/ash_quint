@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `AshQuint.Adapter` has an optional `finish/2`, which `AshQuint.Replay`
+  calls once when a replay ends, pass or fail (also before an adapter
+  exception propagates), with the latest `ctx`. Use it to release what a
+  replay holds open, which matters for the sensitivity check's failing
+  mutants, and for end-of-trace checks: `{:error, message}` fails a passing
+  replay at its last step.
+
 ## 0.1.0
 
 First release.
