@@ -36,6 +36,9 @@ mix hex.build                              # no test/, config/, agent-plans/
 - `AshQuint.Config`, `AshQuint.Manifest`, `AshQuint.Gen`,
   `Mix.Tasks.AshQuint.Gen` — `ash_quint.exs`, the manifest and
   `mix ash_quint.gen`.
+- `AshQuint.Coverage`, `Mix.Tasks.AshQuint.Coverage` — the action × outcome
+  table of the committed manifests, `mix ash_quint.coverage` (also printed
+  by `mix ash_quint.gen` after writing).
 - `AshQuint.Case` — compile-time test generation.
 - `AshQuint.Ash` — Ash helpers, compiled only when Ash is loaded; no other
   module in `lib/` may call Ash (`core_has_no_ash_test`).

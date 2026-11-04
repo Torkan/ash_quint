@@ -62,7 +62,14 @@ defmodule Mix.Tasks.AshQuint.GenTest do
       end
 
       count = length(trace_files(@traces)) - 1
-      assert infos() == ["ash_quint.gen: counter: wrote #{count} traces to #{@traces}"]
+
+      assert infos() == [
+               "ash_quint.gen: counter: wrote #{count} traces to #{@traces}",
+               "counter: 9 traces, 53 steps",
+               "  Inc    23  accepted 20  rejected:over_limit 3",
+               "  Peek   20  accepted 20",
+               "  Reset  10  accepted 10"
+             ]
     end
 
     test "--check passes when current and exits 1 after a model change", %{root: root} do

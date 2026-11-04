@@ -18,6 +18,11 @@ defmodule Mix.Tasks.AshQuint.Gen do
     * `--check` prints the same, and exits with status 1 if anything would
       change.
 
+  After writing a model's traces, prints its action × outcome table (see
+  `mix ash_quint.coverage`), so a regeneration shows at once which
+  outcomes the new traces reach. `--check` and `--dry-run` print only
+  the file changes.
+
   Nothing is written unless every model generates. Quint failing or not
   being runnable, a failing scenario, a witness not reached and a random run
   exiting non-zero all raise with Quint's output.
@@ -30,14 +35,16 @@ defmodule Mix.Tasks.AshQuint.Gen do
   use Mix.Task
 
   alias AshQuint.Config
+  alias AshQuint.Coverage
   alias AshQuint.Gen
+  alias AshQuint.Manifest
 
   @impl Mix.Task
   @spec run([String.t()]) :: :ok
   def run(argv) do
     {opts, names} = OptionParser.parse!(argv, strict: [check: :boolean, dry_run: :boolean])
     config = Config.load!()
-    models = select(config, names)
+    models = Config.select!(config, names)
 
     generated =
       case Gen.generate(config, models) do
@@ -55,21 +62,16 @@ defmodule Mix.Tasks.AshQuint.Gen do
         Mix.shell().info(
           "ash_quint.gen: #{model.name}: wrote #{map_size(result.files)} traces to #{model.out}"
         )
+
+        print_coverage(model, result)
       end)
     end
   end
 
-  defp select(config, []), do: config.models |> Map.values() |> Enum.sort_by(& &1.name)
-
-  defp select(config, names) do
-    by_name = Map.new(config.models, fn {name, model} -> {Atom.to_string(name), model} end)
-
-    Enum.map(names, fn name ->
-      case Map.fetch(by_name, name) do
-        {:ok, model} -> model
-        :error -> Mix.raise("model :#{name} is not configured in ash_quint.exs")
-      end
-    end)
+  defp print_coverage(model, result) do
+    manifest = Manifest.decode!(result.manifest, Path.join(model.out, "manifest.json"))
+    {:ok, coverage} = Coverage.from_manifest(manifest)
+    Enum.each(Coverage.format(Atom.to_string(model.name), coverage), &Mix.shell().info(&1))
   end
 
   defp report(config, models, generated, check?) do

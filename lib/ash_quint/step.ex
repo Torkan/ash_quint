@@ -54,6 +54,17 @@ defmodule AshQuint.Step do
     end
   end
 
+  @doc """
+  The label of a step result, as the manifest records it and
+  `mix ash_quint.coverage` prints it: `"accepted"` for `Accepted`,
+  `"rejected:" <> code` for `Rejected(code)` (so `Rejected("over_limit")`
+  is `"rejected:over_limit"`), and `nil` for a step without a result.
+  """
+  @spec result_label(result()) :: String.t() | nil
+  def result_label(:accepted), do: "accepted"
+  def result_label({:rejected, code}), do: "rejected:" <> code
+  def result_label(nil), do: nil
+
   defp action(state, path) do
     case fetch_path(state, path) do
       {:ok, {:variant, tag, value}} -> {:ok, tag, picks(value)}

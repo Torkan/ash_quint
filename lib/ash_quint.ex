@@ -33,5 +33,8 @@ defmodule AshQuint do
       run Quint and write the traces.
     * `AshQuint.Config` — `ash_quint.exs`.
     * `AshQuint.Manifest` — `<out>/manifest.json`.
+    * `mix ash_quint.coverage` (`Mix.Tasks.AshQuint.Coverage`) and
+      `AshQuint.Coverage` — which outcomes each action reaches in the
+      committed traces.
   """
 end

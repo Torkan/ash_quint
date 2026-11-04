@@ -8,6 +8,18 @@
   replay holds open, which matters for the sensitivity check's failing
   mutants, and for end-of-trace checks: `{:error, message}` fails a passing
   replay at its last step.
+- `mix ash_quint.coverage [model ...]` prints, from the committed
+  manifests (no Node or Quint), which outcomes each model action reaches
+  across the traces (`Inc  23  accepted 20  rejected:over_limit 3`), so
+  unreached paths show at a glance. `mix ash_quint.gen` prints the same
+  table after writing a model. Results are labelled `accepted` and
+  `rejected:<code>` (`AshQuint.Step.result_label/1`).
+- The manifest is format 2: each trace records `outcomes`, the result
+  labels counted per action (empty for models without `lastResult`).
+  Format 1 manifests still decode and replay; `mix ash_quint.coverage`
+  asks to regenerate them, and `mix ash_quint.gen --check` reports them
+  as changed.
+- `AshQuint.Config.select!/2` selects models by name, for Mix tasks.
 - `allow_untested` takes `~w(...)` and `~W(...)` sigils as well as literal
   lists of strings.
 

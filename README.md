@@ -196,16 +196,56 @@ The same seed is passed to `quint test` too, so scenarios that use `nondet`
 regenerate byte for byte. Each file is normalized (Quint's `description` and
 `timestamp` are removed from `#meta`; everything else is kept as written),
 and `<out>/manifest.json` records the Quint version, the seed, a hash of
-each model file, and each trace's name, source, step count and actions.
+each model file, and each trace's name, source, step count, actions and,
+per action, outcomes (see Coverage below).
 
 - Without flags, the task replaces the `*.itf.json` files and
   `manifest.json` in each model's `out` directory and leaves other files
-  there alone. Nothing is written unless every model generates.
+  there alone. Nothing is written unless every model generates. After
+  writing a model it prints the model's coverage table (see below).
 - `--dry-run` prints the files that would be added, changed or removed.
 - `--check` prints the same and exits with status 1 if anything would
   change; with no changes it prints `ash_quint.gen: traces are current`.
 
 Commit the traces and the manifest.
+
+## Coverage: `mix ash_quint.coverage`
+
+```sh
+mix ash_quint.coverage [model ...]
+```
+
+prints, for every configured model (or only those named), which outcomes
+each action reaches across the committed traces. It reads only
+`ash_quint.exs` and the manifests, so it needs neither Node nor Quint. For
+the counter example:
+
+```text
+counter: 9 traces, 53 steps
+  Inc    23  accepted 20  rejected:over_limit 3
+  Peek   20  accepted 20
+  Reset  10  accepted 10
+```
+
+Each row is an action the traces take, with its step count and then each
+result it reaches with its count. A result is labelled `accepted` for
+`Accepted` and `rejected:<code>` for `Rejected(code)`, so
+`Rejected("over_limit")` is `rejected:over_limit`. A label missing from a
+row is an outcome no trace reaches, for example a rejection the random
+runs never hit: add a witness or a scenario for it. Actions the traces
+never take aren't listed (the manifest doesn't know the model's actions),
+so compare the rows with the model's `Action` type.
+
+For a model without `lastResult`, the rows have the step counts only. In a
+model with results, steps without one show as `no result <n>`.
+
+`mix ash_quint.gen` prints the same table after writing each model, so a
+regeneration shows at once what the new traces reach. `--check` and
+`--dry-run` print only the file changes.
+
+A manifest written by ash_quint 0.1.0 (format 1) has no outcomes:
+replays still work with it, but `mix ash_quint.coverage` asks you to
+regenerate it with `MIX_ENV=test mix ash_quint.gen <model>`.
 
 ## Writing an adapter
 

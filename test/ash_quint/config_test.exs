@@ -435,4 +435,33 @@ defmodule AshQuint.ConfigTest do
       Config.model!(validate(minimal()), :nope)
     end
   end
+
+  describe "select!/2" do
+    defp two_models do
+      validate(
+        quint: "0.33.1",
+        models: [
+          zeta: [seed: 1, random: [main: "step"]],
+          alpha: [seed: 1, random: [main: "step"]]
+        ]
+      )
+    end
+
+    test "every model, sorted by name, when none are named" do
+      assert Enum.map(Config.select!(two_models(), []), & &1.name) == [:alpha, :zeta]
+    end
+
+    test "the named models, in the order given" do
+      assert Enum.map(Config.select!(two_models(), ["zeta", "alpha"]), & &1.name) ==
+               [:zeta, :alpha]
+    end
+
+    test "refuses an unknown model without creating its atom" do
+      assert_raise Mix.Error, "model :no_such_model_xyz is not configured in ash_quint.exs", fn ->
+        Config.select!(two_models(), ["alpha", "no_such_model_xyz"])
+      end
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom("no_such_model_xyz") end
+    end
+  end
 end

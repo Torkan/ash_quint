@@ -4,35 +4,54 @@ defmodule AshQuint.Manifest do
   `mix ash_quint.gen` generated for a model:
 
       {
-        "ash_quint": 1,
+        "ash_quint": 2,
         "models": { "test/quint/counter/model.qnt": "sha256:…" },
         "quint": "0.33.1",
         "seed": 20261102,
         "traces": [
           { "actions": { "Inc": 2, "Reset": 1 }, "file": "random_0.itf.json",
-            "name": "0", "source": "random", "steps": 3 }
+            "name": "0",
+            "outcomes": { "Inc": { "accepted": 1, "rejected:over_limit": 1 },
+                          "Reset": { "accepted": 1 } },
+            "source": "random", "steps": 3 }
         ]
       }
 
-  `models` maps each model file, as configured, to its hash. The encoding is
-  deterministic: keys sorted at every level, traces sorted by file name,
-  no timestamps.
+  `models` maps each model file, as configured, to its hash. `actions`
+  counts each action tag over the trace's steps; `outcomes` counts, per
+  action, the steps' result labels (see `AshQuint.Step.result_label/1`).
+  A step without a result (the model has no `lastResult`) is counted in
+  `actions` only, so a model without results has empty `outcomes`. The
+  encoding is deterministic: keys sorted at every level, traces sorted by
+  file name, no timestamps.
+
+  ## Format versions
+
+  `"ash_quint"` is the format version. `encode/1` writes version 2.
+  `decode!/2` also reads version 1, written before `outcomes` was
+  recorded: its entries get `outcomes: nil` and its `version` stays 1, so
+  replays keep working and `mix ash_quint.coverage` can ask for a
+  regeneration.
   """
 
-  @version 1
+  @version 2
+  @versions [1, 2]
 
   defstruct version: @version, quint: nil, seed: nil, models: %{}, traces: []
+
+  @type outcomes :: %{String.t() => %{String.t() => pos_integer()}}
 
   @type entry :: %{
           file: String.t(),
           source: AshQuint.Trace.source(),
           name: String.t(),
           steps: non_neg_integer(),
-          actions: %{String.t() => pos_integer()}
+          actions: %{String.t() => pos_integer()},
+          outcomes: outcomes() | nil
         }
 
   @type t :: %__MODULE__{
-          version: 1,
+          version: 1 | 2,
           quint: String.t(),
           seed: integer(),
           models: %{String.t() => String.t()},
@@ -51,7 +70,9 @@ defmodule AshQuint.Manifest do
 
   @doc """
   Encodes `manifest` as pretty-printed JSON with sorted keys, traces sorted
-  by file and a trailing newline.
+  by file and a trailing newline. Always writes the current format
+  version, so every entry needs its `outcomes`: raises `ArgumentError`
+  for an entry without them.
   """
   @spec encode(t()) :: String.t()
   def encode(%__MODULE__{} = manifest) do
@@ -63,6 +84,7 @@ defmodule AshQuint.Manifest do
           "actions" => ordered(entry.actions),
           "file" => entry.file,
           "name" => entry.name,
+          "outcomes" => encode_outcomes(entry),
           "source" => Atom.to_string(entry.source),
           "steps" => entry.steps
         })
@@ -70,7 +92,7 @@ defmodule AshQuint.Manifest do
 
     json =
       ordered(%{
-        "ash_quint" => manifest.version,
+        "ash_quint" => @version,
         "models" => ordered(manifest.models),
         "quint" => manifest.quint,
         "seed" => manifest.seed,
@@ -78,6 +100,14 @@ defmodule AshQuint.Manifest do
       })
 
     Jason.encode!(json, pretty: true) <> "\n"
+  end
+
+  defp encode_outcomes(%{outcomes: outcomes}) when is_map(outcomes) do
+    outcomes |> Map.new(fn {action, labels} -> {action, ordered(labels)} end) |> ordered()
+  end
+
+  defp encode_outcomes(entry) do
+    raise ArgumentError, "manifest entry #{entry.file} has no outcomes"
   end
 
   @doc """
@@ -89,14 +119,14 @@ defmodule AshQuint.Manifest do
 
   @doc """
   Decodes manifest JSON. `path` is used in error messages. Raises
-  `ArgumentError` for invalid JSON, a version other than 1, an unknown
-  trace source or a malformed field.
+  `ArgumentError` for invalid JSON, a version other than 1 or 2, an
+  unknown trace source or a malformed field.
   """
   @spec decode!(binary(), String.t()) :: t()
   def decode!(binary, path) do
     case Jason.decode(binary) do
-      {:ok, %{"ash_quint" => @version} = json} ->
-        from_json(json, path)
+      {:ok, %{"ash_quint" => version} = json} when version in @versions ->
+        from_json(json, version, path)
 
       {:ok, %{"ash_quint" => version}} ->
         fail!(path, "unsupported manifest version #{inspect(version)}")
@@ -109,17 +139,18 @@ defmodule AshQuint.Manifest do
     end
   end
 
-  defp from_json(json, path) do
+  defp from_json(json, version, path) do
     quint = field!(json, "quint", &is_binary/1, "a string", path)
     seed = field!(json, "seed", &is_integer/1, "an integer", path)
     models = field!(json, "models", &string_map?/1, "a map of strings", path)
     traces = field!(json, "traces", &is_list/1, "a list", path)
 
     %__MODULE__{
+      version: version,
       quint: quint,
       seed: seed,
       models: models,
-      traces: traces |> Enum.with_index() |> Enum.map(&entry!(&1, path))
+      traces: traces |> Enum.with_index() |> Enum.map(&entry!(&1, version, path))
     }
   end
 
@@ -138,27 +169,51 @@ defmodule AshQuint.Manifest do
             "name" => name,
             "steps" => steps,
             "actions" => actions
-          }, _index},
+          } = json, index},
+         version,
          path
        )
        when is_binary(file) and is_binary(source) and is_binary(name) and is_integer(steps) and
               steps >= 0 and is_map(actions) do
-    if Enum.all?(actions, fn {k, v} -> is_binary(k) and is_integer(v) and v > 0 end) do
-      %{
-        file: file,
-        source: source!(source, file, path),
-        name: name,
-        steps: steps,
-        actions: actions
-      }
-    else
+    unless counts?(actions) do
       fail!(path, "invalid manifest: actions of #{file} must map names to positive integers")
+    end
+
+    %{
+      file: file,
+      source: source!(source, file, path),
+      name: name,
+      steps: steps,
+      actions: actions,
+      outcomes: outcomes!(json, version, file, index, path)
+    }
+  end
+
+  defp entry!({_entry, index}, _version, path) do
+    fail!(path, "invalid manifest: traces[#{index}] is malformed")
+  end
+
+  defp outcomes!(_json, 1, _file, _index, _path), do: nil
+
+  defp outcomes!(%{"outcomes" => outcomes}, _version, file, _index, path) do
+    if is_map(outcomes) and
+         Enum.all?(outcomes, fn {k, v} -> is_binary(k) and is_map(v) and counts?(v) end) do
+      outcomes
+    else
+      fail!(
+        path,
+        "invalid manifest: outcomes of #{file} must map actions to maps of " <>
+          "labels to positive integers"
+      )
     end
   end
 
-  defp entry!({_entry, index}, path) do
+  defp outcomes!(_json, _version, _file, index, path) do
     fail!(path, "invalid manifest: traces[#{index}] is malformed")
   end
+
+  defp counts?(map),
+    do: Enum.all?(map, fn {k, v} -> is_binary(k) and is_integer(v) and v > 0 end)
 
   defp source!(source, file, path) do
     case Map.fetch(@sources, source) do

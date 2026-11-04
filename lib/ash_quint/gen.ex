@@ -286,28 +286,44 @@ defmodule AshQuint.Gen do
 
   @doc """
   The manifest entry for a generated trace: `steps` is the number of states
-  after the initial one, and `actions` counts their action tags, read with
-  the model's `action_path` and `result_path`. Raises `ArgumentError` when a
-  state's action can't be read.
+  after the initial one, `actions` counts their action tags, and `outcomes`
+  counts, per action, their result labels (`AshQuint.Step.result_label/1`;
+  steps without a result aren't counted there). States are read with the
+  model's `action_path` and `result_path`. Raises `ArgumentError` when a
+  state's action or result can't be read.
   """
   @spec entry(String.t(), AshQuint.Trace.source(), String.t(), AshQuint.Trace.t(), Model.t()) ::
           Manifest.entry()
   def entry(file, source, name, trace, %Model{} = model) do
     opts = [action_path: model.action_path, result_path: model.result_path]
 
-    actions =
+    steps =
       trace.states
       |> Enum.with_index()
       |> Enum.drop(1)
       |> Enum.map(fn {state, index} ->
         case Step.from_state(state, index, opts) do
-          {:ok, step} -> step.action_taken
+          {:ok, step} -> {step.action_taken, Step.result_label(step.result)}
           {:error, reason} -> raise ArgumentError, "#{file}, state #{index}: #{reason}"
         end
       end)
-      |> Enum.frequencies()
 
-    %{file: file, source: source, name: name, steps: length(trace.states) - 1, actions: actions}
+    actions = steps |> Enum.map(&elem(&1, 0)) |> Enum.frequencies()
+
+    outcomes =
+      steps
+      |> Enum.reject(fn {_action, label} -> is_nil(label) end)
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Map.new(fn {action, labels} -> {action, Enum.frequencies(labels)} end)
+
+    %{
+      file: file,
+      source: source,
+      name: name,
+      steps: length(trace.states) - 1,
+      actions: actions,
+      outcomes: outcomes
+    }
   end
 
   @doc """

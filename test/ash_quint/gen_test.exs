@@ -4,6 +4,7 @@ defmodule AshQuint.GenTest do
   alias AshQuint.Config
   alias AshQuint.Gen
   alias AshQuint.Manifest
+  alias AshQuint.Trace
 
   @moduletag :tmp_dir
 
@@ -533,6 +534,53 @@ defmodule AshQuint.GenTest do
     end
   end
 
+  describe "entry/5" do
+    setup :setup_root
+
+    test "counts actions and, per action, result labels", %{root: root} do
+      model = config(root).models.counter
+      accepted = {:variant, "Accepted", {}}
+      rejected = {:variant, "Rejected", "over_limit"}
+
+      trace = %Trace{
+        path: "t.itf.json",
+        vars: ["lastAction", "lastResult", "n"],
+        states: [
+          state("Init", accepted),
+          state("Inc", accepted),
+          state("Inc", rejected),
+          state("Inc", accepted),
+          state("Reset", accepted)
+        ]
+      }
+
+      assert Gen.entry("random_0.itf.json", :random, "0", trace, model) == %{
+               file: "random_0.itf.json",
+               source: :random,
+               name: "0",
+               steps: 4,
+               actions: %{"Inc" => 3, "Reset" => 1},
+               outcomes: %{
+                 "Inc" => %{"accepted" => 2, "rejected:over_limit" => 1},
+                 "Reset" => %{"accepted" => 1}
+               }
+             }
+    end
+
+    test "a model without results has no outcomes", %{root: root} do
+      model = config(root).models.counter
+
+      trace = %Trace{
+        path: "t.itf.json",
+        vars: ["lastAction", "n"],
+        states: Enum.map(["Init", "Inc"], &Map.delete(state(&1, nil), "lastResult"))
+      }
+
+      assert %{actions: %{"Inc" => 1}, outcomes: %{}} =
+               Gen.entry("random_0.itf.json", :random, "0", trace, model)
+    end
+  end
+
   describe "diff/2 and write!/2" do
     setup %{tmp_dir: tmp_dir} do
       out = Path.join(tmp_dir, "out")
@@ -609,7 +657,11 @@ defmodule AshQuint.GenTest do
     end
   end
 
+  defp state(tag, result) do
+    %{"lastAction" => {:variant, tag, %{}}, "lastResult" => result, "n" => 0}
+  end
+
   defp entry(file, source, name, steps, actions) do
-    %{file: file, source: source, name: name, steps: steps, actions: actions}
+    %{file: file, source: source, name: name, steps: steps, actions: actions, outcomes: %{}}
   end
 end

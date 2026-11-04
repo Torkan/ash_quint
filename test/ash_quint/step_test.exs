@@ -38,6 +38,12 @@ defmodule AshQuint.StepTest do
              Step.from_state(state(action, {:variant, "Rejected", "too_big"}), 1, [])
   end
 
+  test "result labels" do
+    assert Step.result_label(:accepted) == "accepted"
+    assert Step.result_label({:rejected, "over_limit"}) == "rejected:over_limit"
+    assert Step.result_label(nil) == nil
+  end
+
   test "absent lastResult gives nil" do
     state = %{"count" => 3, "lastAction" => {:variant, "Reset", {}}}
     assert {:ok, %Step{result: nil, state: %{"count" => 3}}} = Step.from_state(state, 1, [])

@@ -6,7 +6,12 @@ defmodule AshQuint.ManifestTest do
   @path "test/fixtures/quint/counter/manifest.json"
 
   defp entry(file, source, name, actions) do
-    %{file: file, source: source, name: name, steps: 3, actions: actions}
+    outcomes = %{
+      "Action1" => %{"accepted" => 1},
+      "Action2" => %{"rejected:x" => 1, "accepted" => 1}
+    }
+
+    %{file: file, source: source, name: name, steps: 3, actions: actions, outcomes: outcomes}
   end
 
   defp manifest(traces, actions_order \\ :asc) do
@@ -38,7 +43,7 @@ defmodule AshQuint.ManifestTest do
     b = Manifest.encode(manifest(Enum.reverse(@entries), :desc))
 
     assert a == b
-    assert String.starts_with?(a, "{\n  \"ash_quint\": 1,\n  \"models\": {\n")
+    assert String.starts_with?(a, "{\n  \"ash_quint\": 2,\n  \"models\": {\n")
     assert String.ends_with?(a, "\n}\n")
 
     files = Regex.scan(~r/"file": "([^"]+)"/, a, capture: :all_but_first)
@@ -57,7 +62,19 @@ defmodule AshQuint.ManifestTest do
              ~s("models": {\n    "test/quint/counter/model-tests.qnt": "sha256:bb",\n    "test/quint/counter/model.qnt": "sha256:aa"\n  },)
 
     assert a =~
-             ~r/"actions": \{\n.*\n      \},\n      "file": "random_0.itf.json",\n      "name": "0",\n      "source": "random",\n      "steps": 3\n    \}/s
+             ~r/"actions": \{\n.*\n      \},\n      "file": "random_0.itf.json",\n      "name": "0",\n      "outcomes": \{\n.*\n      \},\n      "source": "random",\n      "steps": 3\n    \}/s
+
+    assert a =~
+             ~s("Action2": {\n          "accepted": 1,\n          "rejected:x": 1\n        })
+  end
+
+  test "refuses to encode an entry without outcomes" do
+    manifest = manifest([hd(@entries)])
+    manifest = %{manifest | traces: Enum.map(manifest.traces, &%{&1 | outcomes: nil})}
+
+    assert_raise ArgumentError, "manifest entry scenario_incTest.itf.json has no outcomes", fn ->
+      Manifest.encode(manifest)
+    end
   end
 
   test "round-trips" do
@@ -91,7 +108,7 @@ defmodule AshQuint.ManifestTest do
 
   defp json(overrides) do
     %{
-      "ash_quint" => 1,
+      "ash_quint" => 2,
       "quint" => "0.33.1",
       "seed" => 1,
       "models" => %{"m.qnt" => "sha256:aa"},
@@ -101,7 +118,8 @@ defmodule AshQuint.ManifestTest do
           "source" => "random",
           "name" => "0",
           "steps" => 2,
-          "actions" => %{"Init" => 1, "Inc" => 1}
+          "actions" => %{"Init" => 1, "Inc" => 1},
+          "outcomes" => %{"Inc" => %{"accepted" => 1}}
         }
       ]
     }
@@ -109,9 +127,59 @@ defmodule AshQuint.ManifestTest do
     |> Jason.encode!()
   end
 
+  test "decodes a version 2 manifest with outcomes" do
+    manifest = Manifest.decode!(json(%{}), @path)
+
+    assert manifest.version == 2
+    assert [%{outcomes: %{"Inc" => %{"accepted" => 1}}}] = manifest.traces
+  end
+
+  test "decodes a version 1 manifest, without outcomes" do
+    traces = [
+      %{
+        "file" => "random_0.itf.json",
+        "source" => "random",
+        "name" => "0",
+        "steps" => 1,
+        "actions" => %{"Inc" => 1}
+      }
+    ]
+
+    manifest = Manifest.decode!(json(%{"ash_quint" => 1, "traces" => traces}), @path)
+
+    assert manifest.version == 1
+    assert [%{actions: %{"Inc" => 1}, outcomes: nil}] = manifest.traces
+  end
+
   test "refuses an unknown version" do
-    assert_raise ArgumentError, "#{@path}: unsupported manifest version 2", fn ->
-      Manifest.decode!(json(%{"ash_quint" => 2}), @path)
+    assert_raise ArgumentError, "#{@path}: unsupported manifest version 3", fn ->
+      Manifest.decode!(json(%{"ash_quint" => 3}), @path)
+    end
+  end
+
+  test "a version 2 entry needs well-formed outcomes" do
+    entry = %{
+      "file" => "random_0.itf.json",
+      "source" => "random",
+      "name" => "0",
+      "steps" => 1,
+      "actions" => %{"Inc" => 1}
+    }
+
+    assert_raise ArgumentError, "#{@path}: invalid manifest: traces[0] is malformed", fn ->
+      Manifest.decode!(json(%{"traces" => [entry]}), @path)
+    end
+
+    for outcomes <- [%{"Inc" => %{"accepted" => 0}}, %{"Inc" => 1}, []] do
+      assert_raise ArgumentError,
+                   "#{@path}: invalid manifest: outcomes of random_0.itf.json must map " <>
+                     "actions to maps of labels to positive integers",
+                   fn ->
+                     Manifest.decode!(
+                       json(%{"traces" => [Map.put(entry, "outcomes", outcomes)]}),
+                       @path
+                     )
+                   end
     end
   end
 
@@ -122,7 +190,8 @@ defmodule AshQuint.ManifestTest do
         "source" => "fuzz",
         "name" => "0",
         "steps" => 2,
-        "actions" => %{}
+        "actions" => %{},
+        "outcomes" => %{}
       }
     ]
 
@@ -152,7 +221,8 @@ defmodule AshQuint.ManifestTest do
         "source" => "random",
         "name" => "0",
         "steps" => 2,
-        "actions" => %{"Inc" => 0}
+        "actions" => %{"Inc" => 0},
+        "outcomes" => %{}
       }
     ]
 

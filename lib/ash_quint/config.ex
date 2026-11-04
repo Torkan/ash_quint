@@ -154,6 +154,26 @@ defmodule AshQuint.Config do
   end
 
   @doc """
+  The models named in `names` (strings, as given on the command line), in
+  that order, or every configured model sorted by name when `names` is
+  empty. An unknown name raises a `Mix.Error`; no atoms are created.
+  """
+  @spec select!(t(), [String.t()]) :: [Model.t()]
+  def select!(%__MODULE__{models: models}, []),
+    do: models |> Map.values() |> Enum.sort_by(& &1.name)
+
+  def select!(%__MODULE__{models: models}, names) do
+    by_name = Map.new(models, fn {name, model} -> {Atom.to_string(name), model} end)
+
+    Enum.map(names, fn name ->
+      case Map.fetch(by_name, name) do
+        {:ok, model} -> model
+        :error -> Mix.raise("model :#{name} is not configured in ash_quint.exs")
+      end
+    end)
+  end
+
+  @doc """
   The Quint command, with `{version}` replaced by the configured version in
   each element.
   """

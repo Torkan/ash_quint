@@ -1,5 +1,5 @@
 {
-  "ash_quint": 1,
+  "ash_quint": 2,
   "models": {
     "priv/examples/counter/model-tests.qnt": "sha256:9e9628d2abd708ad7601f1863db2ddc3d2c477b7e6667e139da40a7eb383acbc",
     "priv/examples/counter/model.qnt": "sha256:89fc19fbb313282b47b315f76398d3b136a0a9dc36cbfae0f664accdc2ffc512"
@@ -15,6 +15,17 @@
       },
       "file": "random_0.itf.json",
       "name": "0",
+      "outcomes": {
+        "Inc": {
+          "accepted": 2
+        },
+        "Peek": {
+          "accepted": 7
+        },
+        "Reset": {
+          "accepted": 1
+        }
+      },
       "source": "random",
       "steps": 10
     },
@@ -26,6 +37,18 @@
       },
       "file": "random_1.itf.json",
       "name": "1",
+      "outcomes": {
+        "Inc": {
+          "accepted": 3,
+          "rejected:over_limit": 1
+        },
+        "Peek": {
+          "accepted": 4
+        },
+        "Reset": {
+          "accepted": 2
+        }
+      },
       "source": "random",
       "steps": 10
     },
@@ -37,6 +60,17 @@
       },
       "file": "random_2.itf.json",
       "name": "2",
+      "outcomes": {
+        "Inc": {
+          "accepted": 4
+        },
+        "Peek": {
+          "accepted": 3
+        },
+        "Reset": {
+          "accepted": 3
+        }
+      },
       "source": "random",
       "steps": 10
     },
@@ -48,6 +82,17 @@
       },
       "file": "random_3.itf.json",
       "name": "3",
+      "outcomes": {
+        "Inc": {
+          "accepted": 3
+        },
+        "Peek": {
+          "accepted": 5
+        },
+        "Reset": {
+          "accepted": 2
+        }
+      },
       "source": "random",
       "steps": 10
     },
@@ -57,6 +102,11 @@
       },
       "file": "scenario_incTest.itf.json",
       "name": "incTest",
+      "outcomes": {
+        "Inc": {
+          "accepted": 1
+        }
+      },
       "source": "scenario",
       "steps": 1
     },
@@ -66,6 +116,12 @@
       },
       "file": "scenario_overLimitTest.itf.json",
       "name": "overLimitTest",
+      "outcomes": {
+        "Inc": {
+          "accepted": 1,
+          "rejected:over_limit": 1
+        }
+      },
       "source": "scenario",
       "steps": 2
     },
@@ -76,6 +132,14 @@
       },
       "file": "scenario_resetTest.itf.json",
       "name": "resetTest",
+      "outcomes": {
+        "Inc": {
+          "accepted": 1
+        },
+        "Reset": {
+          "accepted": 1
+        }
+      },
       "source": "scenario",
       "steps": 2
     },
@@ -85,6 +149,12 @@
       },
       "file": "witness_witOverLimit.itf.json",
       "name": "witOverLimit",
+      "outcomes": {
+        "Inc": {
+          "accepted": 2,
+          "rejected:over_limit": 1
+        }
+      },
       "source": "witness",
       "steps": 3
     },
@@ -96,6 +166,17 @@
       },
       "file": "witness_witResetAfterInc.itf.json",
       "name": "witResetAfterInc",
+      "outcomes": {
+        "Inc": {
+          "accepted": 3
+        },
+        "Peek": {
+          "accepted": 1
+        },
+        "Reset": {
+          "accepted": 1
+        }
+      },
       "source": "witness",
       "steps": 5
     }
