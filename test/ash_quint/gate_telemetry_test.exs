@@ -9,7 +9,8 @@ defmodule AshQuint.GateTelemetryTest do
   alias AshQuint.Test.RaceCounter
 
   # Fires [:ash_quint_test, :tick] from its op tasks; attaches a telemetry
-  # gate on it in init/2 and detaches it in finish/2.
+  # gate on it in init/2 and detaches it in finish/2, unless detach: false.
+  # raise_in: "IncRead" raises from that step.
   defmodule TickAdapter do
     @moduledoc false
     use AshQuint.Adapter
@@ -22,10 +23,19 @@ defmodule AshQuint.GateTelemetryTest do
       test = Keyword.fetch!(opts, :test)
       id = Telemetry.attach([[:ash_quint_test, :tick]], name: :tick)
       send(test, {:init, Gate.current_replay(), id})
-      {:ok, %{id: id, test: test}}
+
+      {:ok,
+       %{
+         id: id,
+         test: test,
+         detach: Keyword.get(opts, :detach, true),
+         raise_in: Keyword.get(opts, :raise_in)
+       }}
     end
 
     @impl true
+    def step(%{raise_in: action}, %Step{action_taken: action}), do: raise("boom")
+
     def step(ctx, %Step{action_taken: "IncStart", nondet_picks: %{"op" => op}}) do
       call = fn ->
         :telemetry.execute([:ash_quint_test, :tick], %{}, %{})
@@ -47,7 +57,7 @@ defmodule AshQuint.GateTelemetryTest do
 
     @impl true
     def finish(ctx, _result) do
-      Telemetry.detach(ctx.id)
+      if ctx.detach, do: Telemetry.detach(ctx.id)
       send(ctx.test, :finished)
       :ok
     end
@@ -90,6 +100,37 @@ defmodule AshQuint.GateTelemetryTest do
       assert_received {:init, _ref, id}
       assert_received :finished
       assert handlers(id) == []
+    end
+
+    test "the replay detaches the handlers finish/2 leaves attached" do
+      states = [init(), inc_start(0, "o1", 1), inc_advance(0, "o1"), inc_done(0, "o1")]
+
+      assert {:ok, _report} =
+               Replay.run(TickAdapter, trace(states), adapter_opts: [test: self(), detach: false])
+
+      assert_received {:init, _ref, id}
+      assert_received :finished
+      assert handlers(id) == []
+    end
+
+    test "the replay detaches its handlers when the adapter raises" do
+      states = [init(), inc_start(0, "o1", 1), inc_advance(0, "o1"), inc_done(0, "o1")]
+      opts = [adapter_opts: [test: self(), detach: false, raise_in: "IncRead"]]
+
+      assert_raise RuntimeError, "boom", fn -> Replay.run(TickAdapter, trace(states), opts) end
+
+      assert_received {:init, _ref, id}
+      assert handlers(id) == []
+    end
+
+    test "the replay leaves other replays' handlers attached" do
+      other = Telemetry.attach([[:ash_quint_test, :tick]], replay: make_ref())
+      on_exit(fn -> Telemetry.detach(other) end)
+
+      states = [init(), inc_start(0, "o1", 1), inc_advance(0, "o1"), inc_done(0, "o1")]
+      Replay.run(TickAdapter, trace(states), adapter_opts: [test: self(), detach: false])
+
+      assert [_handler] = handlers(other)
     end
   end
 

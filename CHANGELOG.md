@@ -75,8 +75,9 @@
   - `AshQuint.Gate.Telemetry.attach/2` and `detach/1`: gates at telemetry
     events (Ecto queries, Ash action spans), named `{:query, n}` by
     default, that gate only the ops of the replay that attached them.
-    `telemetry` is an optional dependency; the module is compiled when it
-    is present. `AshQuint.Gate.current_replay/0` is the running replay.
+    The replay detaches them when it ends, after `finish/2`, also when
+    the adapter raises. `telemetry` is an optional dependency; the module
+    is compiled when it is present. `AshQuint.Gate.current_replay/0` is the running replay.
   - An optional adapter callback, `blocked?(ctx, op_info)`, polled every
     10 ms while the replay settles: an op it says is blocked settles
     without waiting out the settle timeout. A call records what it may

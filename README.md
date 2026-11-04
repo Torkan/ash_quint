@@ -741,18 +741,16 @@ where the gates are and on how the op tasks reach the database.
 
    ```elixir
    def init(_trace, _opts) do
-     gates = AshQuint.Gate.Telemetry.attach([[:my_app, :repo, :query]])
-     {:ok, %{gates: gates}}
+     AshQuint.Gate.Telemetry.attach([[:my_app, :repo, :query]])
+     {:ok, %{}}
    end
 
    def step(ctx, %Step{action_taken: "IncRead", nondet_picks: %{"op" => op}}),
      do: {:advance, op, ctx, at: {:query, 2}}
-
-   def finish(ctx, _result) do
-     AshQuint.Gate.Telemetry.detach(ctx.gates)
-     :ok
-   end
    ```
+
+   The replay detaches the gates when it ends, after `finish/2`, also when
+   the adapter raises; `detach/1` detaches them earlier.
 
    Gates are named `{:query, n}` (`n` counted per process); `name: :update`
    names them `{:update, n}`, and a function `(event, metadata, n -> name)`

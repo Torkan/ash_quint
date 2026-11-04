@@ -5,17 +5,15 @@ if Code.ensure_loaded?(:telemetry) do
     Telemetry gates: a gate (`AshQuint.Gate.checkpoint/1`) at every
     telemetry event an op task emits, without changing the system's code.
 
-    An adapter attaches them in `init/2` and detaches them in `finish/2`:
+    An adapter attaches them in `init/2`:
 
         def init(trace, opts) do
-          gates = AshQuint.Gate.Telemetry.attach([[:my_app, :repo, :query]])
-          {:ok, %{gates: gates}}
+          AshQuint.Gate.Telemetry.attach([[:my_app, :repo, :query]])
+          {:ok, %{}}
         end
 
-        def finish(ctx, _result) do
-          AshQuint.Gate.Telemetry.detach(ctx.gates)
-          :ok
-        end
+    The replay detaches them when it ends, after `finish/2`, also when the
+    adapter raises. `detach/1` detaches them earlier.
 
     Telemetry handlers run in the process that emits the event, so a
     handler on Ecto's `[…, :repo, :query]` stops an op task after each of
@@ -86,6 +84,17 @@ if Code.ensure_loaded?(:telemetry) do
     @spec detach(handler_id()) :: :ok
     def detach(id) do
       _ = :telemetry.detach(id)
+      :ok
+    end
+
+    @doc false
+    # Called by AshQuint.Replay when a replay ends, after finish/2 and on
+    # exceptions, so handlers an adapter didn't detach don't pile up.
+    @spec detach_replay(reference()) :: :ok
+    def detach_replay(ref) do
+      for %{id: {__MODULE__, ^ref, _unique} = id} <- :telemetry.list_handlers([]),
+          do: :telemetry.detach(id)
+
       :ok
     end
 

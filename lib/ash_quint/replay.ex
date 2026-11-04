@@ -50,7 +50,10 @@ defmodule AshQuint.Replay do
   `<model> <source> <name>, step <index> (<action>), seed <seed>: `.
   """
 
+  @compile {:no_warn_undefined, AshQuint.Gate.Telemetry}
+
   alias AshQuint.{Adapter, Gate, Step, Trace}
+  alias AshQuint.Gate.Telemetry, as: GateTelemetry
   alias AshQuint.Replay.Ops
 
   # {:pending, ctx} is the sequential form: one at a time, and nothing but
@@ -185,6 +188,7 @@ defmodule AshQuint.Replay do
     after
       # Every path has cancelled already; this is for exceptions.
       Gate.cancel_all(run.ref, %{})
+      detach_telemetry(run.ref)
       Gate.put_current_replay(previous)
     end
   end
@@ -199,6 +203,11 @@ defmodule AshQuint.Replay do
       {:ok, report} -> report
       {:error, failure} -> raise ExUnit.AssertionError, message: failure.message
     end
+  end
+
+  # AshQuint.Gate.Telemetry exists only when the optional :telemetry is.
+  defp detach_telemetry(ref) do
+    if Code.ensure_loaded?(GateTelemetry), do: GateTelemetry.detach_replay(ref)
   end
 
   defp start(run, adapter_opts) do
