@@ -175,6 +175,8 @@ defmodule AshQuint.Replay do
       }
     }
 
+    previous = Gate.put_current_replay(run.ref)
+
     try do
       with {:ok, ctx, step0} <- start(run, Keyword.get(opts, :adapter_opts, [])) do
         {result, st} = replay_from(run, ctx, step0)
@@ -183,6 +185,7 @@ defmodule AshQuint.Replay do
     after
       # Every path has cancelled already; this is for exceptions.
       Gate.cancel_all(run.ref, %{})
+      Gate.put_current_replay(previous)
     end
   end
 
@@ -314,7 +317,7 @@ defmodule AshQuint.Replay do
         called(run, step, st, called)
 
       {called, {:fired, held}} ->
-        {ops, lines} = Ops.fired(run.ref, run.timeouts, st.ops, step, held)
+        {ops, lines} = Ops.fired(run.ref, timeouts(run, st, step), st.ops, step, held)
         halt(run, step, %{st | ctx: returned_ctx(called, st.ctx), ops: ops}, lines)
     end
   end
@@ -436,7 +439,7 @@ defmodule AshQuint.Replay do
     do: sync(run, step, kind, errors, st)
 
   defp sync_step(run, step, kind, errors, st) do
-    {ops, lines} = Ops.settle(run.ref, run.timeouts, st.ops, step)
+    {ops, lines} = Ops.settle(run.ref, timeouts(run, st, step), st.ops, step)
     settled(run, step, kind, errors, %{st | ops: ops}, nil, lines)
   end
 
@@ -459,7 +462,10 @@ defmodule AshQuint.Replay do
       true ->
         # A serialized op runs through every gate to its result here.
         free = run.mutate == {:serialize, step.index}
-        {ops, lines} = Ops.start(run.ref, run.timeouts, st.ops, step, op, call, opts, free)
+
+        {ops, lines} =
+          Ops.start(run.ref, timeouts(run, st, step), st.ops, step, op, call, opts, free)
+
         early = if free, do: [], else: early(run, step, op, ops[op], opts)
         lines = lines ++ early ++ at(op, ops[op], opts)
         settled(run, step, :start, [], %{st | ops: ops}, op, lines)
@@ -482,7 +488,7 @@ defmodule AshQuint.Replay do
 
       true ->
         before = st.ops[op]
-        {ops, lines} = Ops.advance(run.ref, run.timeouts, st.ops, step, op, opts)
+        {ops, lines} = Ops.advance(run.ref, timeouts(run, st, step), st.ops, step, op, opts)
 
         early =
           if match?({:finished, _}, before.status),
@@ -492,6 +498,19 @@ defmodule AshQuint.Replay do
         lines = lines ++ early ++ at(op, ops[op], opts)
         settled(run, step, :advance, [], %{st | ops: ops}, op, lines)
     end
+  end
+
+  # The timeouts for Ops, with the adapter's blocked?/2 (when it has one)
+  # as a function of an op and its entry. A raise in it is the adapter's.
+  defp timeouts(run, st, step) do
+    if Adapter.exports?(run.adapter, :blocked?, 2),
+      do: Map.put(run.timeouts, :blocked, &blocked?(run, st, step, &1, &2)),
+      else: run.timeouts
+  end
+
+  defp blocked?(run, st, step, op, entry) do
+    info = %{op: op, pid: entry.pid, started_at: entry.started_at, info: Gate.info(entry.pid)}
+    guard(run, st.ctx, step, "blocked?/2", fn -> run.adapter.blocked?(st.ctx, info) end) == true
   end
 
   defp valid_opts?(opts, keys) do
@@ -545,7 +564,7 @@ defmodule AshQuint.Replay do
 
   defp complete_in_flight(run, step, st, op) do
     entry = st.ops[op]
-    {ops, result, lines} = Ops.complete(run.ref, run.timeouts, st.ops, step, op)
+    {ops, result, lines} = Ops.complete(run.ref, timeouts(run, st, step), st.ops, step, op)
     st = %{st | ops: ops}
     errors = op_outcome_errors(run, step, st, op, entry, result)
     settled(run, step, :complete, errors, st, op, lines)

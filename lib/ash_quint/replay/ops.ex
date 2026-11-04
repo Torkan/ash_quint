@@ -21,11 +21,14 @@ defmodule AshQuint.Replay.Ops do
 
   @type t :: %{optional(String.t()) => entry()}
 
+  # `blocked` (optional) is the adapter's blocked?/2 as a function of an op
+  # and its entry, polled while settling.
   @type timeouts :: %{
-          settle: non_neg_integer(),
-          step: non_neg_integer(),
-          complete: non_neg_integer(),
-          gate: non_neg_integer()
+          required(:settle) => non_neg_integer(),
+          required(:step) => non_neg_integer(),
+          required(:complete) => non_neg_integer(),
+          required(:gate) => non_neg_integer(),
+          optional(:blocked) => (String.t(), entry() -> boolean())
         }
 
   @doc false
@@ -117,7 +120,9 @@ defmodule AshQuint.Replay.Ops do
   @spec settle(reference(), timeouts(), t(), Step.t(), t() | nil) :: {t(), [String.t()]}
   def settle(ref, timeouts, ops, step, before \\ nil) do
     before = before || ops
-    {settled, timeouts_seen} = Gate.await_settled(ref, ops, timeouts.settle)
+
+    {settled, timeouts_seen} =
+      Gate.await_settled(ref, ops, timeouts.settle, Map.get(timeouts, :blocked))
 
     # An op that may block and didn't settle counts as blocked.
     settled =

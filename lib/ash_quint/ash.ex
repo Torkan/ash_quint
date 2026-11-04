@@ -12,6 +12,10 @@ if Code.ensure_loaded?(Ash) do
       * `read_map/2` snapshots a resource as a map keyed by one field.
       * `sql_rows/3` snapshots raw SQL rows, for state that Ash doesn't read
         one row per record (temporal versions, for example).
+      * `pg_backend_pid/1` and `pg_blocked?/2` tell the replay that an op
+        waits on a Postgres lock (for `c:AshQuint.Adapter.blocked?/2`).
+      * `transfer_context/1` carries the tracer span context into an op
+        task; the replay calls it.
     """
 
     @type outcome :: :accepted | {:rejected, String.t()} | {:failed, String.t()}
@@ -118,6 +122,84 @@ if Code.ensure_loaded?(Ash) do
     def sql_rows(repo, sql, params \\ []) do
       %{columns: columns, rows: rows} = repo.query!(sql, params)
       Enum.map(rows, &(columns |> Enum.zip(&1) |> Map.new()))
+    end
+
+    @doc """
+    Returns the Postgres backend pid of the connection `repo` uses in the
+    calling process, and records it as the op's `:backend_pid` with
+    `AshQuint.Gate.put_info/2` (in an op task; elsewhere it only returns
+    it).
+
+    Call it inside the op's call, on the connection the call's statements
+    use: inside its transaction, or with a pool that keeps one connection
+    per process (the Ecto sandbox in `:auto` mode does). Then the adapter's
+    `blocked?/2` can ask `pg_blocked?/2` whether the op waits on a lock.
+
+    ## Example
+
+        call = fn ->
+          MyApp.Repo.transaction(fn ->
+            AshQuint.Ash.pg_backend_pid(MyApp.Repo)
+            # the statements that may wait on another op's row lock
+          end)
+        end
+    """
+    @spec pg_backend_pid(module()) :: integer()
+    def pg_backend_pid(repo) do
+      %{rows: [[pid]]} = repo.query!("select pg_backend_pid()", [])
+      AshQuint.Gate.put_info(:backend_pid, pid)
+      pid
+    end
+
+    @doc """
+    Whether the Postgres backend `backend` is waiting on a lock that another
+    backend holds (`pg_blocking_pids/1` isn't empty).
+
+    `backend` is a backend pid, an op's info (a map with `:backend_pid`) or
+    the `t:AshQuint.Adapter.op_info/0` that `blocked?/2` is given. An op
+    that recorded no backend pid (see `pg_backend_pid/1`) is not blocked.
+
+    It runs a query on `repo` from the calling process, so that process
+    needs a connection of its own: in the Ecto sandbox's shared mode the
+    query would wait for the connection the op holds.
+
+    ## Example
+
+        @impl true
+        def blocked?(_ctx, op_info), do: AshQuint.Ash.pg_blocked?(MyApp.Repo, op_info)
+    """
+    @spec pg_blocked?(module(), integer() | map()) :: boolean()
+    def pg_blocked?(repo, %{info: info}) when is_map(info), do: pg_blocked?(repo, info)
+    def pg_blocked?(repo, %{backend_pid: backend}), do: pg_blocked?(repo, backend)
+
+    def pg_blocked?(repo, backend) when is_integer(backend) do
+      %{rows: [[blocked]]} =
+        repo.query!("select cardinality(pg_blocking_pids($1)) > 0", [backend])
+
+      blocked
+    end
+
+    def pg_blocked?(_repo, _info), do: false
+
+    @doc """
+    Captures the calling process's Ash tracer span contexts and returns a
+    function that sets them in the process that calls it.
+
+    `AshQuint.Replay` calls it when it starts an op task, and runs the
+    function in the task before the op's call, so spans the call opens are
+    children of the test's spans. Only tracer context moves between
+    processes this way: actor and tenant travel in the call's options.
+
+    ## Options
+
+      * `:tracer` — a tracer module or a list of them. Default: the
+        `:tracer` configured for `:ash`.
+    """
+    @spec transfer_context([{:tracer, module() | [module()] | nil}]) :: (-> :ok)
+    def transfer_context(opts \\ []) do
+      tracers = Keyword.get_lazy(opts, :tracer, fn -> Application.get_env(:ash, :tracer) end)
+      context = Ash.ProcessHelpers.get_context_for_transfer(tracer: tracers)
+      fn -> Ash.ProcessHelpers.transfer_context(context) end
     end
   end
 end

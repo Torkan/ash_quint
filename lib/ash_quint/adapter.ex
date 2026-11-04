@@ -34,6 +34,9 @@ defmodule AshQuint.Adapter do
       step.
     * `finish/2` (optional) runs once when the replay ends, to release what
       `ctx` holds and for checks that belong after the last step.
+    * `blocked?/2` (optional) says whether an op in flight that hasn't
+      reached a gate is waiting on a lock, so it counts as settled at once
+      (see "Blocked ops").
 
   ## Finishing
 
@@ -82,6 +85,19 @@ defmodule AshQuint.Adapter do
     * `outcome/1`: as above, decided at run time (see `outcome/2`);
     * `invariants/0`: `[]`;
     * `finish/2`: none; nothing is called when the replay ends.
+
+  ## Blocked ops
+
+  After each step the replay waits until every op in flight has settled:
+  reached a gate, finished, or is blocked. Without `blocked?/2`, an op
+  that does neither within `:settle_timeout` fails the step, unless it was
+  started (or advanced) with `may_block: true`, which makes it count as
+  blocked. With `blocked?/2`, the replay asks every 10 ms about the ops
+  still running, and those it says are blocked settle at once. A call can
+  record what it may wait on with `AshQuint.Gate.put_info/2`; for
+  Postgres, `AshQuint.Ash.pg_backend_pid/1` and `AshQuint.Ash.pg_blocked?/2`
+  do both halves. A `blocked?/2` that raises fails the step like any
+  other callback.
 
   ## Scoping the projection
 
@@ -161,7 +177,21 @@ defmodule AshQuint.Adapter do
   @callback finish(ctx(), result :: :ok | {:error, AshQuint.Replay.failure()}) ::
               :ok | {:error, String.t()}
 
-  @optional_callbacks expected: 2, outcome: 1, invariants: 0, finish: 2
+  @typedoc """
+  What `blocked?/2` is told about an op that is running (neither at a gate
+  nor finished): its id, its task's pid, the step that started it and what
+  the call recorded with `AshQuint.Gate.put_info/2`.
+  """
+  @type op_info :: %{op: op(), pid: pid(), started_at: pos_integer(), info: map()}
+
+  @doc """
+  Says whether a running op is waiting on something another op holds (a
+  row lock, a mutex), so it counts as settled without waiting out the
+  settle timeout. Polled every 10 ms while the replay settles.
+  """
+  @callback blocked?(ctx(), op_info()) :: boolean()
+
+  @optional_callbacks expected: 2, outcome: 1, invariants: 0, finish: 2, blocked?: 2
 
   @doc false
   defmacro __using__(_opts) do
@@ -237,7 +267,10 @@ defmodule AshQuint.Adapter do
     if exports?(adapter, :finish, 2), do: adapter.finish(ctx, result), else: :ok
   end
 
-  defp exports?(adapter, fun, arity) do
+  @doc false
+  # Whether `adapter` defines fun/arity (loading it first).
+  @spec exports?(module(), atom(), arity()) :: boolean()
+  def exports?(adapter, fun, arity) do
     Code.ensure_loaded?(adapter) and function_exported?(adapter, fun, arity)
   end
 end

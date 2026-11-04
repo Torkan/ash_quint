@@ -8,11 +8,14 @@ defmodule AshQuint.CoreHasNoAshTest do
     lib = Path.join(File.cwd!(), "lib")
 
     for mod <- Application.spec(:ash_quint, :modules),
-        mod != AshQuint.Ash,
+        not ash_helper?(mod),
         source = mod.module_info(:compile)[:source],
         String.starts_with?(List.to_string(source), lib <> "/"),
         do: mod
   end
+
+  # AshQuint.Ash and AshQuint.Ash.*: compiled only when Ash is loaded.
+  defp ash_helper?(mod), do: match?(["AshQuint", "Ash" | _], Module.split(mod))
 
   defp forbidden?(mod) do
     case Module.split(mod) do
@@ -26,6 +29,8 @@ defmodule AshQuint.CoreHasNoAshTest do
   test "core modules don't call Ash" do
     modules = core_modules()
     assert AshQuint.ITF in modules
+    assert AshQuint.Gate in modules
+    refute AshQuint.Ash.Gate in modules
 
     calls =
       for mod <- modules,

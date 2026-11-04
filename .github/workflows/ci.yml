@@ -71,6 +71,48 @@ jobs:
       - run: mix test --only quint_cli
       - run: mix ash_quint.gen --check
 
+  postgres:
+    name: postgres (Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.17"
+            otp: "27"
+          - elixir: "1.20"
+            otp: "29"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-postgres-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-postgres-${{ matrix.elixir }}-${{ matrix.otp }}-
+      - run: mix deps.get
+      - run: mix test.create
+      - run: mix test.migrate
+      - run: mix test.check_migrations
+      - run: mix test --only postgres
+
   without-ash:
     name: compile without Ash
     runs-on: ubuntu-latest
@@ -95,3 +137,5 @@ jobs:
           mix compile --warnings-as-errors 2>&1 | tee compile.log
           if grep -q "warning:" compile.log; then exit 1; fi
           test ! -e _build/dev/lib/ash_quint/ebin/Elixir.AshQuint.Ash.beam
+          test ! -e _build/dev/lib/ash_quint/ebin/Elixir.AshQuint.Ash.Gate.beam
+          test ! -e _build/dev/lib/ash_quint/ebin/Elixir.AshQuint.Gate.Telemetry.beam

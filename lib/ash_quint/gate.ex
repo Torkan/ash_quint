@@ -26,11 +26,23 @@ defmodule AshQuint.Gate do
   cancels an op (at the end of the trace, or on a failure), a gated op
   exits from `checkpoint/1` with `{:shutdown, :ash_quint_cancelled}`.
 
+  Two other ways to place gates: the Ash change `AshQuint.Ash.Gate`
+  (`change {AshQuint.Ash.Gate, at: :after_read}`), and telemetry gates,
+  `AshQuint.Gate.Telemetry`, which stop an op task at the telemetry events
+  it emits (Ecto queries, Ash action spans). A call can record what it may
+  wait on with `put_info/2`, for the adapter's `blocked?/2`.
+
   The op tasks are registered in an ETS table owned by the `:ash_quint`
-  application. The other functions here are for `AshQuint.Replay`.
+  application. The functions without docs here are for `AshQuint.Replay`.
   """
 
   alias AshQuint.Gate.Table
+
+  # AshQuint.Ash is compiled only when Ash is loaded; context_transfer/0
+  # checks for it.
+  @compile {:no_warn_undefined, AshQuint.Ash}
+
+  @current_replay :ash_quint_replay
 
   @typedoc "A gate name: the adapter's own atom (or a tuple such as `{:query, 1}`)."
   @type name :: atom() | tuple()
@@ -48,7 +60,7 @@ defmodule AshQuint.Gate do
   """
   @spec checkpoint(name()) :: :ok
   def checkpoint(name) when is_atom(name) or is_tuple(name) do
-    case gate(name) do
+    case gate(name, :any) do
       :cancel -> exit({:shutdown, :ash_quint_cancelled})
       :ok -> :ok
     end
@@ -56,10 +68,82 @@ defmodule AshQuint.Gate do
 
   def checkpoint(_name), do: :ok
 
-  defp gate(name) do
+  @doc """
+  Records `value` under `key` in the info of the calling op task's op;
+  returns `:ok`.
+
+  The replay passes the info to the adapter's `blocked?/2`, so a call can
+  say what it may wait on: the Postgres backend of its connection, say
+  (`AshQuint.Ash.pg_backend_pid/1` does that). Like `checkpoint/1`, it
+  finds the op through `$callers`, does nothing outside an op task and
+  never raises.
+  """
+  @spec put_info(term(), term()) :: :ok
+  def put_info(key, value) do
     case lookup(Table.name(), [self() | callers()]) do
-      {_pid, replay, ref, op, :gated, timeout} -> wait(replay, ref, op, name, timeout)
-      _other -> :ok
+      {pid, _replay, _ref, _op, _mode, _timeout, info} ->
+        :ets.update_element(Table.name(), pid, {7, Map.put(info, key, value)})
+        :ok
+
+      nil ->
+        :ok
+    end
+  catch
+    _kind, _reason -> :ok
+  end
+
+  @doc false
+  # The info of the op task `pid` (%{} when it has no row).
+  @spec info(pid()) :: map()
+  def info(pid) do
+    case lookup(Table.name(), [pid]) do
+      {_pid, _replay, _ref, _op, _mode, _timeout, info} -> info
+      nil -> %{}
+    end
+  end
+
+  @doc """
+  The replay running in the calling process (its ref), or `nil`.
+
+  `AshQuint.Replay` sets it before it calls the adapter's `init/2` and
+  clears it when the replay ends, so an adapter can scope what it attaches
+  to its own replay, as `AshQuint.Gate.Telemetry.attach/2` does.
+  """
+  @spec current_replay() :: reference() | nil
+  def current_replay, do: Process.get(@current_replay)
+
+  @doc false
+  # Sets the current replay; returns the previous one.
+  @spec put_current_replay(reference() | nil) :: reference() | nil
+  def put_current_replay(nil), do: Process.delete(@current_replay)
+  def put_current_replay(ref), do: Process.put(@current_replay, ref)
+
+  @doc false
+  # The op of the replay `ref` that the calling process belongs to (itself
+  # or through $callers), or nil.
+  @spec current_op(reference()) :: String.t() | nil
+  def current_op(ref) do
+    case lookup(Table.name(), [self() | callers()]) do
+      {_pid, _replay, ^ref, op, _mode, _timeout, _info} -> op
+      _other -> nil
+    end
+  catch
+    _kind, _reason -> nil
+  end
+
+  @doc false
+  # checkpoint/1 for the ops of the replay `ref` only. Returns :cancel
+  # instead of exiting when the op is cancelled.
+  @spec scoped_checkpoint(reference(), name()) :: :ok | :cancel
+  def scoped_checkpoint(ref, name), do: gate(name, ref)
+
+  defp gate(name, scope) do
+    case lookup(Table.name(), [self() | callers()]) do
+      {_pid, replay, ref, op, :gated, timeout, _info} when scope in [:any, ref] ->
+        wait(replay, ref, op, name, timeout)
+
+      _other ->
+        :ok
     end
   catch
     _kind, _reason -> :ok
@@ -127,19 +211,28 @@ defmodule AshQuint.Gate do
     replay = self()
     callers = [replay | callers()]
     go = make_ref()
+    transfer = context_transfer()
 
     pid =
       spawn_link(fn ->
         Process.put(:"$callers", callers)
 
         receive do
-          ^go -> send(replay, {:ash_quint_op, ref, op, run(call)})
+          ^go ->
+            # Inside run/1, so a raising tracer becomes the op's result.
+            result =
+              run(fn ->
+                transfer.()
+                call.()
+              end)
+
+            send(replay, {:ash_quint_op, ref, op, result})
         end
       end)
 
     row =
       {pid, replay, ref, op, Keyword.get(opts, :mode, :gated),
-       Keyword.get(opts, :gate_timeout, 5_000)}
+       Keyword.get(opts, :gate_timeout, 5_000), %{}}
 
     if :ets.whereis(Table.name()) == :undefined do
       raise "the :ash_quint application isn't started, so there is no gate table"
@@ -148,6 +241,14 @@ defmodule AshQuint.Gate do
     :ets.insert(Table.name(), row)
     send(pid, go)
     pid
+  end
+
+  # The Ash tracer span context of the caller, to set in the op task
+  # (AshQuint.Ash is compiled only when Ash is loaded).
+  defp context_transfer do
+    if Code.ensure_loaded?(AshQuint.Ash),
+      do: AshQuint.Ash.transfer_context(),
+      else: fn -> :ok end
   end
 
   defp run(call) do
@@ -161,11 +262,46 @@ defmodule AshQuint.Gate do
   # Waits until no op is :running, or `timeout` ms. Handles every gate,
   # result and gate-timeout message of `ref` that arrives meanwhile (and
   # those already there): a gate puts its op :at_gate (a freed op is
-  # released at once), a result makes it :finished. Returns the ops and the
-  # gate timeouts reported, as {op, name}, in order.
-  @spec await_settled(reference(), ops(), non_neg_integer()) :: {ops(), [{String.t(), name()}]}
-  def await_settled(ref, ops, timeout) do
+  # released at once), a result makes it :finished. With `blocked?`, a
+  # function of an op and its entry, every running op is checked every
+  # 10 ms, and those it says are blocked become :blocked. Returns the ops
+  # and the gate timeouts reported, as {op, name}, in order.
+  @spec await_settled(
+          reference(),
+          ops(),
+          non_neg_integer(),
+          (String.t(), map() -> boolean()) | nil
+        ) :: {ops(), [{String.t(), name()}]}
+  def await_settled(ref, ops, timeout, blocked? \\ nil)
+
+  def await_settled(ref, ops, timeout, nil) do
     await(ref, ops, &settled?/1, deadline(timeout), [])
+  end
+
+  def await_settled(ref, ops, timeout, blocked?) do
+    poll(ref, ops, blocked?, deadline(timeout), [])
+  end
+
+  @poll 10
+
+  # Waits up to @poll ms at a time, then asks blocked? about the ops still
+  # running.
+  defp poll(ref, ops, blocked?, deadline, timeouts) do
+    now = System.monotonic_time(:millisecond)
+    {ops, timeouts} = await(ref, ops, &settled?/1, min(now + @poll, deadline), timeouts)
+
+    ops =
+      Map.new(ops, fn
+        {op, %{status: :running} = entry} ->
+          if blocked?.(op, entry), do: {op, %{entry | status: :blocked}}, else: {op, entry}
+
+        other ->
+          other
+      end)
+
+    if settled?(ops) or System.monotonic_time(:millisecond) >= deadline,
+      do: await(ref, ops, &settled?/1, deadline(0), timeouts),
+      else: poll(ref, ops, blocked?, deadline, timeouts)
   end
 
   @doc false
@@ -298,7 +434,7 @@ defmodule AshQuint.Gate do
     await_down(alive, :infinity)
 
     if :ets.whereis(Table.name()) != :undefined,
-      do: :ets.match_delete(Table.name(), {:_, :_, ref, :_, :_, :_})
+      do: :ets.match_delete(Table.name(), {:_, :_, ref, :_, :_, :_, :_})
 
     flush(ref)
   end
@@ -309,7 +445,7 @@ defmodule AshQuint.Gate do
   defp table_pids(ref) do
     if :ets.whereis(Table.name()) == :undefined,
       do: [],
-      else: :ets.select(Table.name(), [{{:"$1", :_, ref, :_, :_, :_}, [], [:"$1"]}])
+      else: :ets.select(Table.name(), [{{:"$1", :_, ref, :_, :_, :_, :_}, [], [:"$1"]}])
   end
 
   defp await_down(monitors, _deadline) when monitors == %{}, do: monitors

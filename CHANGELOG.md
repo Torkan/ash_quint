@@ -68,6 +68,27 @@
 - `AshQuint.Case` tags concurrent traces' replays `quint_concurrent: true`,
   takes `traces: :all | :sequential | :concurrent` to split one model's
   traces between two modules, and `replay:` for the replay's timeouts.
+- Ash and databases in concurrent replays:
+  - `AshQuint.Ash.Gate`, an Ash change (`change {AshQuint.Ash.Gate, at:
+    :after_read}`) that gates an action: in a `before_action` hook, or
+    while the changeset is built in an atomic action.
+  - `AshQuint.Gate.Telemetry.attach/2` and `detach/1`: gates at telemetry
+    events (Ecto queries, Ash action spans), named `{:query, n}` by
+    default, that gate only the ops of the replay that attached them.
+    `telemetry` is an optional dependency; the module is compiled when it
+    is present. `AshQuint.Gate.current_replay/0` is the running replay.
+  - An optional adapter callback, `blocked?(ctx, op_info)`, polled every
+    10 ms while the replay settles: an op it says is blocked settles
+    without waiting out the settle timeout. A call records what it may
+    wait on with `AshQuint.Gate.put_info/2`. For Postgres,
+    `AshQuint.Ash.pg_backend_pid/1` and `AshQuint.Ash.pg_blocked?/2`
+    (`pg_blocking_pids`).
+  - Op tasks get the test process's Ash tracer span context
+    (`AshQuint.Ash.transfer_context/1`).
+  - The README's "Databases" covers placing gates, the Ecto sandbox's
+    shared mode and real connections (which races inside a transaction
+    need), cleanup and blocked ops. ash_quint's own tests replay the race
+    example over Postgres too (`mix test --only postgres`).
 
 ## 0.1.0
 

@@ -13,10 +13,25 @@ defmodule AshQuint.MixProject do
       test_ignore_filters: [&String.starts_with?(&1, "test/fixtures/")],
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      aliases: aliases(),
       description: "Replay Quint model traces against an Elixir/Ash system in ExUnit.",
       package: package(),
       docs: docs(),
       dialyzer: [plt_add_apps: [:mix, :ex_unit], plt_local_path: "priv/plts"]
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
+        "test.generate_migrations": :test,
+        "test.check_migrations": :test,
+        "test.create": :test,
+        "test.migrate": :test,
+        "test.rollback": :test,
+        "test.drop": :test,
+        "test.reset": :test
+      ]
     ]
   end
 
@@ -34,9 +49,25 @@ defmodule AshQuint.MixProject do
     [
       {:jason, "~> 1.4"},
       {:ash, "~> 3.0", optional: true},
+      {:telemetry, "~> 1.0", optional: true},
+      {:ash_postgres, "~> 2.0", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+    ]
+  end
+
+  # The :postgres tests' database (AshQuint.TestRepo); its migrations are
+  # generated from the resources into priv/test_repo (not packaged).
+  defp aliases do
+    [
+      "test.generate_migrations": "ash_postgres.generate_migrations",
+      "test.check_migrations": "ash_postgres.generate_migrations --check",
+      "test.create": "ash_postgres.create",
+      "test.migrate": "ash_postgres.migrate",
+      "test.rollback": "ash_postgres.rollback",
+      "test.drop": "ash_postgres.drop",
+      "test.reset": ["test.drop", "test.create", "test.migrate"]
     ]
   end
 
@@ -61,6 +92,7 @@ defmodule AshQuint.MixProject do
           AshQuint.Case,
           AshQuint.Adapter,
           AshQuint.Gate,
+          AshQuint.Gate.Telemetry,
           AshQuint.Names,
           AshQuint.Replay,
           AshQuint.Sensitivity,
@@ -69,7 +101,7 @@ defmodule AshQuint.MixProject do
           AshQuint.ITF,
           AshQuint.ITF.Error
         ],
-        Ash: [AshQuint.Ash],
+        Ash: [AshQuint.Ash, AshQuint.Ash.Gate],
         Mix: [
           Mix.Tasks.AshQuint.Gen,
           AshQuint.Gen,

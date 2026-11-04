@@ -21,8 +21,16 @@ Also, when traces, the example or packaging change:
 mix compile --force --warnings-as-errors   # with MIX_ENV=test too
 mix test --only quint_cli                  # needs Node
 MIX_ENV=test mix ash_quint.gen --check     # needs Node
-mix hex.build                              # no test/, config/, agent-plans/
+mix hex.build                              # no test/, config/, agent-plans/,
+                                           # priv/test_repo, priv/resource_snapshots
                                            # or root ash_quint.exs in the files
+```
+
+When the Postgres tests, the Gate, the replay or `AshQuint.Ash` change:
+
+```sh
+mix test --only postgres                   # needs Postgres; see "Postgres"
+mix test.check_migrations
 ```
 
 ## Module map
@@ -33,9 +41,11 @@ mix hex.build                              # no test/, config/, agent-plans/
 - `AshQuint.Adapter`, `AshQuint.Names`, `AshQuint.Replay` — the adapter
   behaviour and the replay; `AshQuint.Replay.Ops` (internal) — the ops in
   flight during a concurrent replay.
-- `AshQuint.Gate` — gates (`checkpoint/1`) and the op-task primitives;
+- `AshQuint.Gate` — gates (`checkpoint/1`, `put_info/2`,
+  `current_replay/0`) and the op-task primitives;
   `AshQuint.Application` starts `AshQuint.Gate.Table`, the ETS table that
-  registers op tasks.
+  registers op tasks. `AshQuint.Gate.Telemetry` — telemetry gates scoped to
+  a replay, compiled only when `:telemetry` is loaded (optional dep).
 - `AshQuint.Sensitivity` — mutants (perturbed key, dropped call or op
   start/completion, serialized op) and untested keys, actions and
   interleavings; `overlaps/1` over a replay report.
@@ -46,8 +56,10 @@ mix hex.build                              # no test/, config/, agent-plans/
   table of the committed manifests, `mix ash_quint.coverage` (also printed
   by `mix ash_quint.gen` after writing).
 - `AshQuint.Case` — compile-time test generation.
-- `AshQuint.Ash` — Ash helpers, compiled only when Ash is loaded; no other
-  module in `lib/` may call Ash (`core_has_no_ash_test`).
+- `AshQuint.Ash`, `AshQuint.Ash.Gate` — Ash helpers (outcomes, snapshots,
+  tracer context transfer, `pg_backend_pid/1`, `pg_blocked?/2`) and the
+  gate change, compiled only when Ash is loaded; no other module in `lib/`
+  may call Ash (`core_has_no_ash_test`, which skips every `AshQuint.Ash.*`).
 - `priv/examples/counter/` — the example model and its committed traces
   (configured in the root `ash_quint.exs`, which isn't packaged).
   Regenerate with `MIX_ENV=test mix ash_quint.gen counter`.
@@ -63,6 +75,12 @@ mix hex.build                              # no test/, config/, agent-plans/
   (an Agent-backed counter, gates and a lock) for the concurrent replay
   tests, plus `ConcurrentToyAdapterBlind`, whose projection is blind until
   completion, for the serialization mutant.
+- `test/support/test_repo.ex` (`AshQuint.TestRepo`) and
+  `test/support/postgres/` — the Postgres test setup: `PgDomain`,
+  `PgRaceCounter` (the race resource over Postgres), `RacePgAdapter` (the
+  race example unboxed), `PgOpsAdapter` (per-op calls, for the sandbox
+  tests) and `DataCase` (`async: true` for the shared sandbox,
+  `unboxed: true` for real connections). Tests in `test/ash_quint/postgres/`.
 
 ## Quint
 
@@ -76,6 +94,25 @@ mix hex.build                              # no test/, config/, agent-plans/
   string isn't word-split.
 - Pass model paths relative to the repo root: Quint writes the path into
   `#meta.source`.
+
+## Postgres
+
+- The default suite excludes `:postgres`-tagged tests and must never need
+  Postgres. Run them with `mix test --only postgres`; `test_helper.exs`
+  starts `AshQuint.TestRepo` only then.
+- The database is the developer's own Postgres on localhost (user and
+  password `postgres`; `POSTGRES_PORT`, default 5432;
+  `POSTGRES_TEST_DATABASE`, default `ash_quint_test`). Set it up with
+  `mix test.create` and `mix test.migrate`; `mix test.reset` drops and
+  recreates it.
+- Migrations are generated from the resources, never hand-written: after
+  changing a Postgres resource, run `mix test.generate_migrations --name …`
+  and commit `priv/test_repo/migrations` and
+  `priv/resource_snapshots/test_repo` (neither is packaged).
+  `mix test.check_migrations` fails when they are out of date.
+- `ash_postgres` is a test-only dependency: `mix format` in dev can't
+  import its formatter config, so `.formatter.exs` lists its DSL's
+  `locals_without_parens`.
 
 ## Rules
 

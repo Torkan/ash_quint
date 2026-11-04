@@ -7,6 +7,7 @@ defmodule AshQuint.Test.Mutex do
   def start_link, do: GenServer.start_link(__MODULE__, nil)
   def lock(mutex), do: GenServer.call(mutex, :lock, :infinity)
   def unlock(mutex), do: GenServer.call(mutex, :unlock)
+  def waiting?(mutex, pid), do: GenServer.call(mutex, {:waiting?, pid})
   def stop(mutex), do: GenServer.stop(mutex)
 
   @impl true
@@ -18,6 +19,9 @@ defmodule AshQuint.Test.Mutex do
 
   def handle_call(:lock, from, state),
     do: {:noreply, %{state | waiting: :queue.in(from, state.waiting)}}
+
+  def handle_call({:waiting?, pid}, _from, state),
+    do: {:reply, Enum.any?(:queue.to_list(state.waiting), &match?({^pid, _tag}, &1)), state}
 
   def handle_call(:unlock, {pid, _tag}, %{holder: {pid, monitor}} = state) do
     Process.demonitor(monitor, [:flush])
@@ -73,6 +77,12 @@ defmodule AshQuint.Test.ConcurrentToyAdapter do
   #   :peek_locks      Peek takes the lock
   #   :project_raises  project/1 raises once an op has started
   #
+  # `blocked: true` makes blocked?/2 say whether the op waits for the lock
+  # (an op that locks first puts info lock: :mutex); it sends
+  # {:blocked?, op_info} to `test:`. `blocked: :raise` makes it raise
+  # instead of saying an op is blocked.
+  # Otherwise it returns false.
+  #
   # `start_opts:` and `advance_opts:` map op ids to the options returned
   # with :start and :advance. `test:` is a pid that finish/2 sends
   # {:toy_finish, result, alive} to, alive being Process.alive?/1 of every
@@ -97,6 +107,7 @@ defmodule AshQuint.Test.ConcurrentToyAdapter do
        faults: Keyword.get(opts, :faults, []),
        start_opts: Keyword.get(opts, :start_opts, %{}),
        advance_opts: Keyword.get(opts, :advance_opts, %{}),
+       blocked: Keyword.get(opts, :blocked, false),
        pending: nil,
        test: Keyword.get(opts, :test)
      }}
@@ -171,6 +182,7 @@ defmodule AshQuint.Test.ConcurrentToyAdapter do
         write(ctx, read, by)
 
       :locking in faults ->
+        Gate.put_info(:lock, :mutex)
         Mutex.lock(ctx.mutex)
         read = count(ctx)
         Gate.checkpoint(:after_read)
@@ -214,6 +226,15 @@ defmodule AshQuint.Test.ConcurrentToyAdapter do
       do: raise("project blew up")
 
     %{"count" => state.count}
+  end
+
+  @impl true
+  def blocked?(%{blocked: false}, _op_info), do: false
+
+  def blocked?(ctx, %{pid: pid, info: info} = op_info) do
+    if ctx.test, do: send(ctx.test, {:blocked?, op_info})
+    blocked = info[:lock] == :mutex and Mutex.waiting?(ctx.mutex, pid)
+    if blocked and ctx.blocked == :raise, do: raise("blocked? blew up"), else: blocked
   end
 
   @impl true

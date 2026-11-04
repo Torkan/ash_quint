@@ -270,6 +270,36 @@ defmodule AshQuint.ReplayConcurrentTest do
       assert [%{op: "o1", at_gate: :after_read}, %{op: "o2", at_gate: nil}] = failure.in_flight
     end
 
+    test "an op the adapter reports blocked settles without waiting out the timeout" do
+      opts = [faults: [:locking], blocked: true, test: self()]
+      started = System.monotonic_time(:millisecond)
+      assert {:ok, _report} = run(locked(), opts, settle_timeout: 5_000)
+      # The settle timeout is never waited out (blocked?/2 is polled every 10ms).
+      assert System.monotonic_time(:millisecond) - started < 2_500
+
+      assert_received {:blocked?, %{op: "o2", pid: pid, started_at: 2, info: %{lock: :mutex}}}
+      assert is_pid(pid)
+
+      states = List.replace_at(locked(), 2, inc_start(5, "o2", 1))
+      assert {:error, failure} = run(states, opts, settle_timeout: 5_000)
+      assert failure.message =~ "\"o2\" blocked (since step 2)"
+    end
+
+    test "blocked?/2 raising fails the step like any adapter callback" do
+      opts = [faults: [:locking], blocked: :raise, test: self()]
+
+      assert_raise RuntimeError, "blocked? blew up", fn ->
+        run(locked(), opts, settle_timeout: 5_000)
+      end
+
+      assert_received {:toy_finish, {:error, failure}, alive}
+
+      assert failure.message ==
+               "#{@prefix} 2 (IncStart), seed 7: blocked?/2 raised: blocked? blew up"
+
+      assert alive == [false, false]
+    end
+
     test "a blocked op that later reaches a gate is settled there at the next step" do
       opts = [faults: [:locking], start_opts: %{"o2" => [may_block: true]}]
       states = List.replace_at(locked(), 3, inc_done(5, "o1"))
@@ -314,7 +344,7 @@ defmodule AshQuint.ReplayConcurrentTest do
   end
 
   describe "the end of the replay" do
-    defp own_rows, do: :ets.match_object(Table.name(), {:_, self(), :_, :_, :_, :_})
+    defp own_rows, do: :ets.match_object(Table.name(), {:_, self(), :_, :_, :_, :_, :_})
 
     test "a trace ending with ops in flight passes; the ops are cancelled unchecked" do
       states = [init(), inc_start(0, "o1", 2), inc_start(0, "o2", 2)]

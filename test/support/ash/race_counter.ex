@@ -1,31 +1,16 @@
-defmodule AshQuint.Test.RaceCounter.Checkpoint do
-  @moduledoc false
-  # A change that stops the op task at the gate `at:` while the changeset is
-  # built; it works in atomic actions too.
-  use Ash.Resource.Change
-
-  @impl true
-  def change(changeset, opts, _context) do
-    AshQuint.Gate.checkpoint(Keyword.fetch!(opts, :at))
-    changeset
-  end
-
-  @impl true
-  def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
-end
-
 defmodule AshQuint.Test.RaceCounter do
   @moduledoc false
   # The race example's resource. Its ETS table isn't private, so op tasks
   # (other processes) see the rows; adapters scope by row id.
   #
-  #   :inc         a read-modify-write: the count is read from the
-  #                changeset's data, then the op is gated at :after_read,
-  #                then count + by is written. Two incs that both read
-  #                before either writes lose an update.
-  #   :inc_atomic  gated at :requested, then count + by is computed by the
-  #                data layer from the row as it is when written, and the
-  #                limit is checked there too.
+  #   :inc         a read-modify-write: count + by is computed from the
+  #                changeset's data (the row as read), then the op is gated
+  #                at :after_read (AshQuint.Ash.Gate, in a before_action),
+  #                then the sum is written. Two incs that both read before
+  #                either writes lose an update.
+  #   :inc_atomic  gated at :requested (AshQuint.Ash.Gate, atomic/3), then
+  #                count + by is computed by the data layer from the row as
+  #                it is when written, and the limit is checked there too.
   #
   # Both bump `writes` atomically, so a lost update still counts two writes.
   use Ash.Resource,
@@ -61,7 +46,6 @@ defmodule AshQuint.Test.RaceCounter do
 
       change fn changeset, _context ->
         count = Ash.Changeset.get_data(changeset, :count)
-        AshQuint.Gate.checkpoint(:after_read)
         by = Ash.Changeset.get_argument(changeset, :by)
 
         if count + by > @limit do
@@ -71,13 +55,14 @@ defmodule AshQuint.Test.RaceCounter do
         end
       end
 
+      change {AshQuint.Ash.Gate, at: :after_read}
       change atomic_update(:writes, expr(writes + 1))
     end
 
     update :inc_atomic do
       argument :by, :integer, allow_nil?: false
 
-      change {AshQuint.Test.RaceCounter.Checkpoint, at: :requested}
+      change {AshQuint.Ash.Gate, at: :requested}
 
       change atomic_update(
                :count,

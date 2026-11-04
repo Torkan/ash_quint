@@ -52,6 +52,25 @@ defmodule AshQuint.GateTest do
       Gate.cancel_all(ref, ops)
     end
 
+    test "put_info/2 records info in the op's row, also from a Task of the op", %{ref: ref} do
+      ops =
+        start(ref, fn ->
+          Gate.put_info(:a, 1)
+          Task.await(Task.async(fn -> Gate.put_info(:b, 2) end))
+          Gate.checkpoint(:done)
+        end)
+
+      ops = settle(ref, ops)
+      assert Gate.info(ops["o1"].pid) == %{a: 1, b: 2}
+      Gate.cancel_all(ref, ops)
+      assert Gate.info(ops["o1"].pid) == %{}
+    end
+
+    test "put_info/2 outside an op task is :ok" do
+      assert Gate.put_info(:a, 1) == :ok
+      assert Gate.info(self()) == %{}
+    end
+
     test "release lets it run to the next gate", %{ref: ref} do
       ops =
         start(ref, fn ->
@@ -122,7 +141,7 @@ defmodule AshQuint.GateTest do
       %{ref: make_ref()}
     end
 
-    defp rows(ref), do: :ets.match_object(Table.name(), {:_, :_, ref, :_, :_, :_})
+    defp rows(ref), do: :ets.match_object(Table.name(), {:_, :_, ref, :_, :_, :_, :_})
 
     test "cancel_all stops gated, running and finished ops and leaves the test process alive",
          %{ref: ref} do

@@ -458,13 +458,22 @@ compiles for test (ash_quint is a test-only dependency: put it behind
 `if Mix.env() == :test`, or in a test-only change). Inside one, it waits for
 the replay. Processes the call starts with `Task` gate their op too, since
 the gate looks up `$callers`. Gate names are your own atoms (or tuples).
+The Ash change `AshQuint.Ash.Gate` and telemetry gates
+(`AshQuint.Gate.Telemetry`) place gates without editing the action's code;
+see [Databases](#databases).
 
 **Settling.** After every step, the replay waits until each op in flight is
 at a gate or has finished, then compares the state and runs the invariants,
 on every step, starts included. An op that does neither within
 `settle_timeout` fails the step, unless it was started with
 `may_block: true`: then it counts as blocked (on a lock another op holds,
-say), and the replay waits for it again after the next release.
+say), and the replay waits for it again after the next release. An
+adapter that can tell when an op is blocked defines the optional
+`blocked?(ctx, op_info)`: the replay asks it every 10 ms about the ops
+still running, and an op it says is blocked settles at once, without
+waiting out the timeout. The call records what it may wait on with
+`AshQuint.Gate.put_info/2`; for Postgres, see
+[Databases](#databases).
 
 Options, as a fifth element (`{:start, op, call, ctx, opts}`) or a fourth
 (`{:advance, op, ctx, opts}`):
@@ -501,7 +510,13 @@ lost update. Two things it shows:
 - **Op tasks are other processes.** A `private? true` ETS table is visible
   only to its owner, so concurrent replays need a table that isn't private,
   scoped by the ids the trace names. Database sandboxes allow op tasks
-  through `$callers`, but all of them share the test's connection.
+  through `$callers`, but all of them share the test's connection (see
+  [Databases](#databases)).
+
+An op task gets the test process's Ash tracer span context (the tracers
+configured for `:ash`), so its spans nest under the test's. Actor and
+tenant aren't process state: pass them in the call's options, which `call`
+closes over.
 
 Helpers:
 
@@ -510,6 +525,10 @@ Helpers:
 - `AshQuint.Ash.read_map/2` snapshots a resource as a map keyed by one field;
   `AshQuint.Ash.sql_rows/3` snapshots raw SQL rows, for state Ash doesn't
   read one row per record.
+- `AshQuint.Ash.Gate` gates an Ash action; `AshQuint.Gate.Telemetry`
+  gates at telemetry events; `AshQuint.Ash.pg_backend_pid/1` and
+  `AshQuint.Ash.pg_blocked?/2` report ops blocked on Postgres locks (see
+  [Databases](#databases)).
 
 ## The test case
 
@@ -688,6 +707,130 @@ fails the test, so the list can't go stale. Actions that only ever return
 `Peek`). The `sensitivity:` value must be a literal: the lists can be
 written as `~w(plans)`, but not as module attributes or variables.
 
+## Databases
+
+A concurrent replay reproduces a race only where an op task stops at a
+gate, and only if the ops' database work really overlaps. Both depend on
+where the gates are and on how the op tasks reach the database.
+
+### Placing gates
+
+1. **Explicit checkpoints.** `AshQuint.Gate.checkpoint/1` in the code, or
+   the Ash change `AshQuint.Ash.Gate` in an action:
+
+   ```elixir
+   update :inc do
+     require_atomic? false
+     change MyApp.Counter.Changes.Inc
+     change {AshQuint.Ash.Gate, at: :after_read}
+   end
+   ```
+
+   In an action that isn't atomic the change gates in a `before_action`
+   hook: after every change, inside the action's transaction, right before
+   the write. In an atomic action it gates while the changeset is built,
+   before the transaction, so the data layer computes the atomic values
+   from the row as it is when it writes. This is the most precise option
+   and the most invasive: ash_quint is a test-only dependency, so put the
+   change under `if Mix.env() == :test do … end`, or in a test-only
+   resource or extension.
+2. **Telemetry gates**, attached by the adapter. Telemetry handlers run in
+   the process that emits the event, so a gate on Ecto's query event stops
+   an op task after each of its SQL statements, with no change to the
+   system's code:
+
+   ```elixir
+   def init(_trace, _opts) do
+     gates = AshQuint.Gate.Telemetry.attach([[:my_app, :repo, :query]])
+     {:ok, %{gates: gates}}
+   end
+
+   def step(ctx, %Step{action_taken: "IncRead", nondet_picks: %{"op" => op}}),
+     do: {:advance, op, ctx, at: {:query, 2}}
+
+   def finish(ctx, _result) do
+     AshQuint.Gate.Telemetry.detach(ctx.gates)
+     :ok
+   end
+   ```
+
+   Gates are named `{:query, n}` (`n` counted per process); `name: :update`
+   names them `{:update, n}`, and a function `(event, metadata, n -> name)`
+   names them from the event. Ash's action spans (`[:ash, :my_domain,
+   :update, :start]`) work the same way. The handlers are global, but they
+   gate only the op tasks of the replay that attached them, so other tests,
+   and replays running at the same time, aren't affected. The costs: the
+   gate comes after the query, not before it, and counting queries breaks
+   when the query plan changes.
+3. **Adapter-owned seams**: a behaviour the system already calls (a mail
+   client, a payment gateway) whose test implementation calls
+   `checkpoint/1`. This is the natural gate for "a retry overlapping a
+   commit".
+
+### Sandbox or real connections
+
+- **The Ecto sandbox, shared** (the usual `DataCase`, `async: true`). Op
+  tasks are allowed through `$callers`, so they all use the test's one
+  connection, inside its one wrapping transaction. Statements interleave;
+  transactions don't. While an op is inside `Repo.transaction` it holds the
+  connection, so if it is gated there, the next op's first query waits for
+  the connection, never settles, and the replay fails with a settle timeout
+  that names the gate. Races between separate statements or separate
+  transactions do reproduce here: a read-modify-write split across two
+  transactions loses its update.
+- **Real connections** (`async: false`, the sandbox in `:auto` mode). Each
+  op task checks out a connection of its own, so isolation levels, row
+  locks and deadlocks are real. **Races inside a transaction (row locks,
+  isolation anomalies) need this mode.** Every write commits, so:
+  - delete what the replay created in `finish/2` (its rows, or its
+    tenant); every op task has stopped by then, and an op cancelled inside
+    a transaction has rolled it back;
+  - scope `project/1` to the trace (see "Scope `project/1` to the trace"):
+    the rows of earlier replays and mutants stay committed;
+  - tell the replay when an op waits on another's lock: call
+    `AshQuint.Ash.pg_backend_pid(Repo)` inside the call, on the
+    connection its statements use, and ask Postgres in `blocked?/2`:
+
+    ```elixir
+    @impl true
+    def blocked?(_ctx, op_info), do: AshQuint.Ash.pg_blocked?(MyApp.Repo, op_info)
+    ```
+
+  Other tests that share the database see the committed rows, hence
+  `async: false`.
+- A sandbox owner per op task doesn't work: each op is then inside its
+  own uncommitted transaction, sees none of the others' writes, and
+  nothing races.
+
+The two modes go in two test modules, with `traces:` splitting the model's
+traces (see [The test case](#the-test-case)): the sequential traces in the
+async sandbox module, the concurrent ones in a module that switches the
+sandbox to `:auto`:
+
+```elixir
+defmodule MyApp.RaceConcurrentTraceTest do
+  # No sandbox owner: the sandbox is in :auto mode for this module.
+  use ExUnit.Case, async: false
+
+  use AshQuint.Case,
+    model: :race,
+    adapter: MyApp.RacePgTrace,
+    traces: :concurrent,
+    sensitivity: true
+
+  setup do
+    Ecto.Adapters.SQL.Sandbox.mode(MyApp.Repo, :auto)
+    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.mode(MyApp.Repo, :manual) end)
+  end
+end
+```
+
+ash_quint's own Postgres tests do this: the race example's adapter over
+Postgres,
+[`test/support/postgres/race_pg_adapter.ex`](https://github.com/Torkan/ash_quint/blob/main/test/support/postgres/race_pg_adapter.ex),
+and its module,
+[`test/ash_quint/postgres/race_pg_test.exs`](https://github.com/Torkan/ash_quint/blob/main/test/ash_quint/postgres/race_pg_test.exs).
+
 ## CI
 
 - The default test suite needs neither Node nor Quint: run `mix test`.
@@ -708,15 +851,16 @@ written as `~w(plans)`, but not as module attributes or variables.
   locks, `after_action` hooks, jobs sent after a commit) isn't controlled:
   if a race window has no gate, the replay may pass by luck, and a trace is
   deterministic only when its gates cover every racing point.
-- Blocked ops are detected by timeout only (`may_block: true`), which is
-  timing-based.
+- Blocked ops are detected by `blocked?/2` (for Postgres,
+  `AshQuint.Ash.pg_blocked?/2`) or else by timeout (`may_block: true`),
+  which is timing-based.
 - Processes that don't carry `$callers` back to an op task (a GenServer
   the call sends work to, say) aren't gated.
 - Op tasks are separate processes: private ETS tables and per-process state
   aren't shared with them. With the Ecto sandbox in shared mode they all
   use the test's connection and its one transaction, so races inside
-  transactions (row locks, isolation anomalies) need real connections;
-  database support is planned.
+  transactions (row locks, isolation anomalies) need real connections
+  (see [Databases](#databases)).
 - `random:` takes no invariants to check; any non-zero exit of
   `quint run` fails generation.
 - Model integers are limited to the signed 64-bit range by Quint.

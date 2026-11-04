@@ -1,8 +1,9 @@
 defmodule AshQuint.Gate.Table do
   @moduledoc false
   # Owns the named, public ETS set that registers op tasks. A row is
-  # {op_pid, replay_pid, replay_ref, op, mode, gate_timeout}, where mode is
-  # :gated or :free. The replay inserts a row before the op task runs its
+  # {op_pid, replay_pid, replay_ref, op, mode, gate_timeout, info}, where
+  # mode is :gated or :free and info is the map AshQuint.Gate.put_info/2
+  # writes (the op task's own processes write it). The replay inserts a row before the op task runs its
   # call and deletes it when the op completes or is cancelled.
 
   use GenServer
