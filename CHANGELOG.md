@@ -52,6 +52,22 @@
   resource (`test/support/race_adapter.ex`), and the lost update of its
   read-modify-write action fails `raceTest` at step 4.
 - `:ash_quint` is now an OTP application: it starts the gate table.
+- Sensitivity with concurrent traces. An op's completion and its start
+  are calls the dropped-call mutant can drop (a start counts as changing
+  the state when its op's completion does); `AshQuint.Replay`'s
+  `{:drop, index}` on a `Pending` step drops its op, whose later advances
+  and completion sync as skips. A new mutant, `{:serialize, index}` in
+  `AshQuint.Replay`, runs an overlapping op to completion at its start: per
+  start action, it must be detected in some overlapping trace, or the
+  action's interleaving is untested (`serializing IncStart is never
+  detected`, `IncStart never overlaps another op in any trace`), target
+  `{:interleaving, action}`, allow-listed with
+  `allow_untested: [interleavings: […]]`. `AshQuint.Sensitivity.check/3`'s
+  result has `never_overlap`; `AshQuint.Sensitivity.overlaps/1` tells
+  which ops of a report overlap another.
+- `AshQuint.Case` tags concurrent traces' replays `quint_concurrent: true`,
+  takes `traces: :all | :sequential | :concurrent` to split one model's
+  traces between two modules, and `replay:` for the replay's timeouts.
 
 ## 0.1.0
 

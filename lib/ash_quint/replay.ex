@@ -61,7 +61,11 @@ defmodule AshQuint.Replay do
   @ends_pending "interleaved trace: the trace ends with this {:pending, …} step open; " <>
                   @use_start
 
-  @type mutation :: nil | {:perturb, non_neg_integer(), term()} | {:drop, non_neg_integer()}
+  @type mutation ::
+          nil
+          | {:perturb, non_neg_integer(), term()}
+          | {:drop, non_neg_integer()}
+          | {:serialize, non_neg_integer()}
 
   @type option ::
           {:model, atom()}
@@ -135,7 +139,14 @@ defmodule AshQuint.Replay do
     * `:mutate` — for the sensitivity check: `{:perturb, index, key}`
       replaces the expected value of `key` at step `index` with
       `{:ash_quint_mutated, key}`; `{:drop, index}` replays step `index` as
-      `{:skip, ctx}` without calling `step/2`, closing any pending step. Default `nil`.
+      `{:skip, ctx}` without calling `step/2`, closing any pending step;
+      when that step's result is `Pending` (a start or an advance), its op
+      is dropped: the op's later `{:advance, …}` and `{:complete, …}` sync
+      as skips, so a dropped start never runs and a dropped completion
+      leaves its op at its gate until it is cancelled at the end;
+      `{:serialize, index}` runs the op started at step `index` through
+      every gate to its result at its start (no early-finish check), and
+      holds the result until the op's completion step. Default `nil`.
     * `:settle_timeout` — how long an op in flight may take to reach a gate
       or finish after a step (ms). Default `500`.
     * `:step_timeout` — how long a `step/2` call may take while ops are in
@@ -206,7 +217,7 @@ defmodule AshQuint.Replay do
   # Returns the result with the replay's state: the latest ctx and the last
   # step (for a failure from finish/2 on a passing replay).
   defp replay_from(run, ctx, step0) do
-    st = %{ctx: ctx, pending: nil, ops: %{}, synced: [], last: step0}
+    st = %{ctx: ctx, pending: nil, ops: %{}, dropped: %{}, synced: [], last: step0}
 
     with {:ok, initial_expected} <- initial_expected(run, st, step0),
          {:ok, st} <- replay(run, st) do
@@ -331,7 +342,7 @@ defmodule AshQuint.Replay do
         ])
 
       :dropped ->
-        sync(run, step, :skip, [], %{st | pending: nil})
+        sync_step(run, step, :skip, [], %{st | pending: nil, dropped: dropped(st.dropped, step)})
 
       {:returned, returned} ->
         handle(run, step, st, returned)
@@ -369,9 +380,24 @@ defmodule AshQuint.Replay do
     end
   end
 
+  # A dropped Pending step is a start (or an advance) that never happened:
+  # the op's later advances and its completion are skips, so a dropped
+  # start leaves the state as if the op never ran, and a dropped advance
+  # leaves the op at its gate until it is cancelled at the end.
+  defp dropped(dropped, %Step{result: :pending, op: op}) when is_binary(op),
+    do: Map.put(dropped, op, true)
+
+  defp dropped(dropped, _step), do: dropped
+
   # The returns that start, advance or complete an op.
   defp handle_op(run, step, st, returned) do
     case op_return(returned) do
+      {:advance, op, ctx, _opts} when is_map_key(st.dropped, op) ->
+        sync_step(run, step, :skip, [], %{st | ctx: ctx})
+
+      {:complete, op, ctx} when is_map_key(st.dropped, op) ->
+        sync_step(run, step, :skip, [], %{st | ctx: ctx, dropped: Map.delete(st.dropped, op)})
+
       {:start, op, call, ctx, opts} ->
         start_op(run, step, %{st | ctx: ctx}, op, call, opts)
 
@@ -431,8 +457,11 @@ defmodule AshQuint.Replay do
         ])
 
       true ->
-        {ops, lines} = Ops.start(run.ref, run.timeouts, st.ops, step, op, call, opts)
-        lines = lines ++ early(run, step, op, ops[op], opts) ++ at(op, ops[op], opts)
+        # A serialized op runs through every gate to its result here.
+        free = run.mutate == {:serialize, step.index}
+        {ops, lines} = Ops.start(run.ref, run.timeouts, st.ops, step, op, call, opts, free)
+        early = if free, do: [], else: early(run, step, op, ops[op], opts)
+        lines = lines ++ early ++ at(op, ops[op], opts)
         settled(run, step, :start, [], %{st | ops: ops}, op, lines)
     end
   end

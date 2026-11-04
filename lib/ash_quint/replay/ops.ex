@@ -29,11 +29,21 @@ defmodule AshQuint.Replay.Ops do
         }
 
   @doc false
-  # Starts `op` at `step` and waits until it settles.
-  @spec start(reference(), timeouts(), t(), Step.t(), String.t(), (-> term()), keyword()) ::
-          {t(), [String.t()]}
-  def start(ref, timeouts, ops, step, op, call, opts) do
-    pid = Gate.start_op(ref, op, call, gate_timeout: timeouts.gate)
+  # Starts `op` at `step` and waits until it settles. A `free` op passes
+  # every gate, so it settles when it finishes.
+  @spec start(
+          reference(),
+          timeouts(),
+          t(),
+          Step.t(),
+          String.t(),
+          (-> term()),
+          keyword(),
+          boolean()
+        ) :: {t(), [String.t()]}
+  def start(ref, timeouts, ops, step, op, call, opts, free \\ false) do
+    mode = if free, do: :free, else: :gated
+    pid = Gate.start_op(ref, op, call, gate_timeout: timeouts.gate, mode: mode)
 
     entry = %{
       pid: pid,
@@ -42,6 +52,8 @@ defmodule AshQuint.Replay.Ops do
       status: :running,
       opts: opts
     }
+
+    entry = if free, do: Map.put(entry, :free, true), else: entry
 
     settle(ref, timeouts, Map.put(ops, op, entry), step)
   end
@@ -75,14 +87,18 @@ defmodule AshQuint.Replay.Ops do
   # return in time) and the failure lines.
   @spec complete(reference(), timeouts(), t(), Step.t(), String.t()) ::
           {t(), Gate.result() | nil, [String.t()]}
-  def complete(ref, timeouts, ops, step, op) do
-    {ops, timeouts_seen} = ref |> Gate.await_finished(Gate.free(ops, op), op, timeouts.complete)
+  # `since` is compared with the ops before the release: another op may
+  # reach a gate while this one is awaited.
+  def complete(ref, timeouts, before, step, op) do
+    {ops, timeouts_seen} =
+      ref |> Gate.await_finished(Gate.free(before, op), op, timeouts.complete)
+
     gate_lines = Enum.map(timeouts_seen, &gate_timeout_line(&1, timeouts))
 
     case ops[op] do
       %{status: {:finished, result}, pid: pid} ->
         Gate.forget(pid)
-        {ops, lines} = settle(ref, timeouts, ops |> Map.delete(op) |> wake(), step, ops)
+        {ops, lines} = settle(ref, timeouts, ops |> Map.delete(op) |> wake(), step, before)
         {ops, result, gate_lines ++ lines}
 
       %{} ->

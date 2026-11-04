@@ -18,7 +18,8 @@ defmodule AshQuint.Case do
 
     * a test per trace, named `"<source> <name>"` (`"random 7"`,
       `"witness witA"`, `"scenario incTest"`) and tagged `quint: <source>`
-      and `quint_model: <model>`, which replays the trace with
+      and `quint_model: <model>` (and `quint_concurrent: true` when the
+      manifest marks the trace concurrent), which replays the trace with
       `AshQuint.Replay.run!/3`;
     * `"traces for <model> are current"`, tagged `quint_model: <model>`,
       which fails when a model file's hash differs from the manifest's, so
@@ -32,10 +33,34 @@ defmodule AshQuint.Case do
 
   With `sensitivity:`, it also defines `"sensitivity of <model>"`, tagged
   `quint_model: <model>`, which runs `AshQuint.Sensitivity.check/3` on every
-  trace of the manifest. It fails when a mutant survives, or when a key or
-  an action is untested and isn't allow-listed. An allow-listed key or
-  action that is tested, or that the check doesn't know, fails too, so the
+  selected trace. It fails when a mutant survives, or when a key, an action
+  or an interleaving is untested and isn't allow-listed. An allow-listed
+  target that is tested, or that the check doesn't know, fails too, so the
   list can't go stale.
+
+  Concurrent traces run their ops in other processes, which a private ETS
+  table or a database sandbox may not allow. `traces:` splits one model's
+  traces between two modules: the sequential ones in an async module, the
+  concurrent ones in an `async: false` module against an unboxed database,
+  say:
+
+      defmodule MyApp.RaceTraceTest do
+        use MyApp.DataCase, async: true
+        use AshQuint.Case, model: :race, adapter: MyApp.RaceTrace, traces: :sequential
+      end
+
+      defmodule MyApp.RaceConcurrentTraceTest do
+        use MyApp.UnboxedCase, async: false
+
+        use AshQuint.Case,
+          model: :race,
+          adapter: MyApp.RaceTrace,
+          traces: :concurrent,
+          sensitivity: true
+      end
+
+  Each module also defines the staleness test (and, with `sensitivity:`,
+  its own sensitivity test over its traces).
 
   The config, the manifest, every trace and every model file that exists
   are external resources, so the module recompiles when they change.
@@ -55,7 +80,18 @@ defmodule AshQuint.Case do
       the listed keys and actions as untested (deliberate constants, say).
       The lists must be literal lists of strings or `~w` sigils: they're read
       at compile time, so module attributes and variables aren't allowed.
-      `true` is `[allow_untested: []]`. Default `false`.
+      `true` is `[allow_untested: []]`. Default `false`. `interleavings:`
+      lists start actions whose serialization may go undetected, or whose
+      ops never overlap (`[allow_untested: [interleavings: ["IncStart"]]]`);
+      see `AshQuint.Sensitivity`.
+    * `:traces` — which of the manifest's traces get a test and go into
+      the sensitivity check: `:all`, `:sequential` (those the manifest
+      doesn't mark concurrent) or `:concurrent`. A selection with no trace
+      is a compile error. Default `:all`.
+    * `:replay` — `AshQuint.Replay.run/3` timeouts, in ms:
+      `[settle_timeout: …, step_timeout: …, complete_timeout: …,
+      gate_timeout: …]`. Any other key is a compile error. Default `[]`
+      (the replay's defaults).
   """
 
   alias AshQuint.{Config, Manifest, Sensitivity, Trace}
@@ -67,6 +103,8 @@ defmodule AshQuint.Case do
     adapter = required!(opts, :adapter, env)
 
     allow_untested = sensitivity!(Keyword.get(opts, :sensitivity, false), env)
+    selection = traces!(Keyword.get(opts, :traces, :all), env)
+    replay = replay!(Keyword.get(opts, :replay, []), env)
     config_path = Keyword.get(opts, :config, "ash_quint.exs")
 
     config =
@@ -84,6 +122,7 @@ defmodule AshQuint.Case do
       end
 
     manifest = read_manifest!(model_config, config.root, env)
+    manifest = select!(manifest, selection, model_config, env)
 
     define(%{
       model: model,
@@ -93,8 +132,82 @@ defmodule AshQuint.Case do
       root: config.root,
       config_file: Path.expand(config_path, config.root),
       manifest: manifest,
-      allow_untested: allow_untested
+      allow_untested: allow_untested,
+      replay: replay
     })
+  end
+
+  @selections [:all, :sequential, :concurrent]
+
+  defp traces!(selection, _env) when selection in @selections, do: selection
+
+  defp traces!(other, env) do
+    compile_error!(
+      env,
+      "traces must be :all, :sequential or :concurrent, got #{Macro.to_string(other)}"
+    )
+  end
+
+  # Keeps the manifest entries `selection` picks; none is a compile error.
+  defp select!(manifest, :all, _model_config, _env), do: manifest
+
+  defp select!(manifest, selection, model_config, env) do
+    concurrent = selection == :concurrent
+
+    case Enum.filter(manifest.traces, &(&1.concurrent == concurrent)) do
+      [] ->
+        compile_error!(
+          env,
+          "traces: #{inspect(selection)} selects no trace of #{inspect(model_config.name)}; " <>
+            "#{Path.join(model_config.out, "manifest.json")} has no #{selection} traces"
+        )
+
+      traces ->
+        %{manifest | traces: traces}
+    end
+  end
+
+  @replay_keys [:settle_timeout, :step_timeout, :complete_timeout, :gate_timeout]
+  @replay_shape "settle_timeout, step_timeout, complete_timeout and gate_timeout"
+
+  # The replay: options, as the caller's AST (a value may be an
+  # expression); a literal value must be a non-negative integer.
+  defp replay!(opts, env) when is_list(opts) do
+    Enum.map(opts, fn
+      {key, value} when key in @replay_keys ->
+        if literal?(value) and not (is_integer(value) and value >= 0) do
+          compile_error!(
+            env,
+            "replay option #{key} must be a non-negative integer, got #{Macro.to_string(value)}"
+          )
+        end
+
+        {key, value}
+
+      {key, _value} when is_atom(key) ->
+        compile_error!(
+          env,
+          "unknown replay option #{inspect(key)}; expected settle_timeout, step_timeout, " <>
+            "complete_timeout or gate_timeout"
+        )
+
+      _other ->
+        replay_error!(opts, env)
+    end)
+  end
+
+  defp replay!(other, env), do: replay_error!(other, env)
+
+  # -1 is quoted as a call of -/1.
+  defp literal?({:-, _meta, [number]}) when is_number(number), do: true
+  defp literal?(value), do: Macro.quoted_literal?(value)
+
+  @spec replay_error!(term(), Macro.Env.t()) :: no_return()
+  defp replay_error!(other, env) do
+    compile_error!(
+      env,
+      "replay must be a keyword list of #{@replay_shape}, got #{Macro.to_string(other)}"
+    )
   end
 
   @sensitivity_shape "true, false or [allow_untested: [keys: [...], actions: [...]]]"
@@ -134,10 +247,14 @@ defmodule AshQuint.Case do
       {:actions, actions} ->
         Enum.map(strings!(actions, "actions", env), &{:call, &1})
 
+      {:interleavings, actions} ->
+        Enum.map(strings!(actions, "interleavings", env), &{:interleaving, &1})
+
       {key, _value} when is_atom(key) ->
         compile_error!(
           env,
-          "unknown allow_untested option #{inspect(key)}; expected keys or actions"
+          "unknown allow_untested option #{inspect(key)}; " <>
+            "expected keys, actions or interleavings"
         )
 
       _other ->
@@ -151,7 +268,8 @@ defmodule AshQuint.Case do
   defp allow_untested_error!(other, env) do
     compile_error!(
       env,
-      "allow_untested must be a keyword list of keys and actions, got #{Macro.to_string(other)}"
+      "allow_untested must be a keyword list of keys, actions and interleavings, " <>
+        "got #{Macro.to_string(other)}"
     )
   end
 
@@ -221,22 +339,19 @@ defmodule AshQuint.Case do
     missing = Enum.reject(models, fn {path, _hash} -> File.regular?(Path.join(root, path)) end)
 
     # adapter_opts is the caller's AST, spliced in as is.
-    replay_opts = [
-      model: model,
-      action_path: config.action_path,
-      result_path: config.result_path,
-      pending_result: config.pending_result,
-      op_field: config.op_field,
-      init_action: config.init_action,
-      adapter_opts: setup.adapter_opts
-    ]
+    replay_opts =
+      [
+        model: model,
+        action_path: config.action_path,
+        result_path: config.result_path,
+        pending_result: config.pending_result,
+        op_field: config.op_field,
+        init_action: config.init_action,
+        adapter_opts: setup.adapter_opts
+      ] ++ setup.replay
 
     # Each trace's path and its Trace.load!/2 options.
-    traces =
-      for entry <- manifest.traces,
-          do:
-            {Path.join(out, entry.file),
-             [name: entry.name, source: entry.source, seed: manifest.seed]}
+    traces = Enum.map(manifest.traces, &trace(&1, out, manifest.seed))
 
     resources =
       [setup.config_file, Path.join(out, "manifest.json")] ++
@@ -244,20 +359,7 @@ defmodule AshQuint.Case do
         for({path, _hash} <- models -- missing, do: Path.join(root, path))
 
     trace_tests =
-      for {path, trace_opts} <- traces do
-        source = Keyword.fetch!(trace_opts, :source)
-
-        quote do
-          @tag quint: unquote(source), quint_model: unquote(model)
-          ExUnit.Case.test unquote(Trace.label(Map.new(trace_opts))) do
-            AshQuint.Replay.run!(
-              unquote(setup.adapter),
-              AshQuint.Trace.load!(unquote(path), unquote(trace_opts)),
-              unquote(replay_opts)
-            )
-          end
-        end
-      end
+      Enum.map(manifest.traces, &trace_test(&1, out, setup, replay_opts))
 
     sensitivity_test =
       if setup.allow_untested do
@@ -302,6 +404,26 @@ defmodule AshQuint.Case do
           unquote(root),
           unquote(models),
           unquote(config.on_missing_model)
+        )
+      end
+    end
+  end
+
+  defp trace(entry, out, seed),
+    do: {Path.join(out, entry.file), [name: entry.name, source: entry.source, seed: seed]}
+
+  defp trace_test(entry, out, setup, replay_opts) do
+    {path, trace_opts} = trace(entry, out, setup.manifest.seed)
+    tags = [quint: entry.source, quint_model: setup.model]
+    tags = if entry.concurrent, do: tags ++ [quint_concurrent: true], else: tags
+
+    quote do
+      @tag unquote(tags)
+      ExUnit.Case.test unquote(Trace.label(Map.new(trace_opts))) do
+        AshQuint.Replay.run!(
+          unquote(setup.adapter),
+          AshQuint.Trace.load!(unquote(path), unquote(trace_opts)),
+          unquote(replay_opts)
         )
       end
     end
@@ -384,12 +506,14 @@ defmodule AshQuint.Case do
 
   defp describe({:key, key}), do: "key #{inspect(key)}"
   defp describe({:call, action}), do: "action #{inspect(action)}"
+  defp describe({:interleaving, action}), do: "interleaving #{inspect(action)}"
 
   defp stale_reason(target, result) do
     case {target in result.tested, target} do
       {true, _target} -> "is tested"
       {false, {:key, _key}} -> "isn't in any projection"
       {false, {:call, _action}} -> "makes no system call in any trace"
+      {false, {:interleaving, _action}} -> "starts no op in any trace"
     end
   end
 

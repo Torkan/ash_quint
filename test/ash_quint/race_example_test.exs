@@ -1,13 +1,15 @@
 defmodule AshQuint.RaceExampleTest do
   # The race example end to end: every committed trace of
   # priv/examples/race replays concurrently against the Ash resource, with
-  # the atomic :inc_atomic action. The read-modify-write :inc loses an
-  # update in raceTest.
+  # the atomic :inc_atomic action, and passes the sensitivity check (with
+  # the serialization mutant). The read-modify-write :inc loses an update in
+  # raceTest.
   use ExUnit.Case, async: true
 
   use AshQuint.Case,
     model: :race,
-    adapter: AshQuint.Test.RaceAdapter
+    adapter: AshQuint.Test.RaceAdapter,
+    sensitivity: true
 
   alias AshQuint.{Config, Manifest, Replay, Step, Trace}
   alias AshQuint.Test.RaceAdapter
@@ -28,14 +30,18 @@ defmodule AshQuint.RaceExampleTest do
 
   defp model, do: Config.model!(Config.load!(), :race)
 
-  defp replay(file, adapter_opts \\ []) do
+  defp replay(file, adapter_opts \\ [], opts \\ []) do
     model = model()
 
-    Replay.run(RaceAdapter, load(file),
-      model: :race,
-      pending_result: model.pending_result,
-      op_field: model.op_field,
-      adapter_opts: adapter_opts
+    Replay.run(
+      RaceAdapter,
+      load(file),
+      [
+        model: :race,
+        pending_result: model.pending_result,
+        op_field: model.op_field,
+        adapter_opts: adapter_opts
+      ] ++ opts
     )
   end
 
@@ -90,6 +96,37 @@ defmodule AshQuint.RaceExampleTest do
              {:complete, "o2", %{"count" => 2, "writes" => 1}},
              {:complete, "o1", %{"count" => 2, "writes" => 1}}
            ]
+  end
+
+  test "serializing o1 in raceTest fails at step 1 on count with :inc_atomic" do
+    assert {:error, failure} = replay("scenario_raceTest.itf.json", [], mutate: {:serialize, 1})
+    assert %{index: 1, action: "IncStart"} = failure
+
+    assert failure.message =~
+             "race scenario raceTest, step 1 (IncStart), seed 20261104: " <>
+               "key \"count\":\n  expected: 0\n  actual:   2\n"
+  end
+
+  test "race with :inc_atomic: IncStart's interleaving is tested" do
+    traces = Enum.map(manifest().traces, &load(&1.file))
+
+    result =
+      AshQuint.Sensitivity.check(RaceAdapter, traces,
+        model: :race,
+        pending_result: model().pending_result,
+        op_field: model().op_field
+      )
+
+    assert %{survived: [], untested: [], never_overlap: []} = result
+    assert {:interleaving, "IncStart"} in result.tested
+  end
+
+  test "random_0 of race doesn't overlap; raceTest does" do
+    assert {:ok, random} = replay("random_0.itf.json")
+    assert {:ok, race} = replay("scenario_raceTest.itf.json")
+
+    assert AshQuint.Sensitivity.overlaps(random) == %{1 => false, 3 => false}
+    assert AshQuint.Sensitivity.overlaps(race) == %{1 => true, 2 => true}
   end
 
   test "witness_witOverlap ends with both ops in flight and passes" do

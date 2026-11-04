@@ -388,4 +388,94 @@ defmodule AshQuint.ReplayConcurrentTest do
       assert message(states) =~ "#{@prefix} 2 (Begin), seed 7: interleaved trace: the trace ends"
     end
   end
+
+  describe "drops" do
+    test "dropping a start makes its completion a skip" do
+      states = [init(), inc_start(0, "o1", 2), inc_done(2, "o1")]
+      assert {:error, failure} = run(states, [test: self()], mutate: {:drop, 1})
+
+      assert failure.message ==
+               "#{@prefix} 2 (IncDone), seed 7: key \"count\":\n  expected: 2\n  actual:   0"
+
+      refute Map.has_key?(failure, :in_flight)
+      assert_received {:toy_finish, {:error, %{index: 2}}, []}
+    end
+
+    test "a dropped start's advances are skips too" do
+      states = [init(), inc_start(0, "o1", 1), inc_advance(0, "o1"), inc_done(1, "o1")]
+      assert {:error, failure} = run(states, [faults: [:two_gates]], mutate: {:drop, 1})
+      assert %{index: 3, action: "IncDone"} = failure
+      assert failure.message =~ "key \"count\":\n  expected: 1\n  actual:   0"
+    end
+
+    test "a dropped start syncs as a skip and other ops carry on" do
+      assert {:ok, report} = run(race(), [], mutate: {:drop, 1})
+
+      assert Enum.map(report.synced, &{&1.kind, &1.op}) ==
+               [skip: nil, start: "o2", complete: "o2", skip: nil]
+    end
+
+    test "an op id is started again after its dropped start's completion" do
+      states = [
+        init(),
+        inc_start(0, "o1", 5),
+        inc_done(0, "o1", {:rejected, "too_big"}),
+        inc_start(0, "o1", 1),
+        inc_done(1, "o1")
+      ]
+
+      assert {:ok, report} = run(states, [], mutate: {:drop, 1})
+
+      assert Enum.map(report.synced, &{&1.kind, &1.op}) ==
+               [skip: nil, skip: nil, start: "o1", complete: "o1"]
+    end
+
+    test "dropping a completion fails on state and the op is cancelled at the end" do
+      states = [init(), inc_start(0, "o1", 2), inc_done(2, "o1")]
+      assert {:error, failure} = run(states, [test: self()], mutate: {:drop, 2})
+
+      assert failure.message ==
+               "#{@prefix} 2 (IncDone), seed 7: key \"count\":\n  expected: 2\n  actual:   0\n" <>
+                 "in flight: \"o1\" at gate :requested (since step 1)"
+
+      assert failure.in_flight == [%{op: "o1", started_at: 1, at_gate: :requested}]
+      assert_received {:toy_finish, {:error, %{index: 2}}, [false]}
+    end
+  end
+
+  describe "{:serialize, index}" do
+    test "a serialized op runs to completion at its start and its outcome is checked at its completion" do
+      # WaitOp returns once o1's task has exited, which it has only if o1
+      # ran through its gate at its start.
+      states = [
+        init(),
+        inc_start(0, "o1", 5),
+        wait_op(0, "o1"),
+        inc_done(0, "o1", {:rejected, "too_big"})
+      ]
+
+      assert {:ok, report} = run(states, [], mutate: {:serialize, 1}, step_timeout: 200)
+
+      assert Enum.map(report.synced, &{&1.kind, &1.op}) ==
+               [start: "o1", skip: nil, complete: "o1"]
+
+      states = List.replace_at(states, 3, inc_done(0, "o1"))
+      assert {:error, failure} = run(states, [], mutate: {:serialize, 1}, step_timeout: 200)
+
+      assert failure.message ==
+               "#{@prefix} 3 (IncDone), seed 7: op \"o1\" (started at step 1): " <>
+                 "outcome: expected :accepted, got {:rejected, \"too_big\"}"
+    end
+
+    test "only the op started at the index is serialized" do
+      assert {:error, failure} = run(race(), [], mutate: {:serialize, 2})
+      assert %{index: 2, action: "IncStart"} = failure
+      assert failure.message =~ "key \"count\":\n  expected: 0\n  actual:   2"
+
+      assert failure.in_flight == [
+               %{op: "o1", started_at: 1, at_gate: :requested},
+               %{op: "o2", started_at: 2, at_gate: nil}
+             ]
+    end
+  end
 end

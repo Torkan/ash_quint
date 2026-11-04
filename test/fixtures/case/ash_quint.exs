@@ -14,6 +14,7 @@ end
     missing_fail: model.(:missing_fail, []),
     missing_skip: model.(:missing_skip, on_missing_model: :skip),
     no_manifest: model.(:no_manifest, []),
-    empty: model.(:empty, [])
+    empty: model.(:empty, []),
+    concurrent: model.(:concurrent, [])
   ]
 ]

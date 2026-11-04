@@ -530,7 +530,9 @@ sandbox and `async` apply. At compile time it reads `ash_quint.exs` and the
 model's manifest and defines:
 
 - one test per trace, named `"random 0"`, `"witness witOverLimit"` or
-  `"scenario incTest"`, tagged `quint: <source>` and `quint_model: <model>`;
+  `"scenario incTest"`, tagged `quint: <source>` and `quint_model: <model>`,
+  and `quint_concurrent: true` when the manifest marks the trace
+  concurrent;
 - `"traces for counter are current"`, which fails when a model file's hash
   no longer matches the manifest: run `mix ash_quint.gen counter`;
 - with `sensitivity:`, `"sensitivity of counter"` (see below).
@@ -541,6 +543,41 @@ manifest or one without traces is a compile error.
 
 Select the tests by tag: `mix test --only quint_model:counter`,
 `mix test --only quint:witness`.
+
+Concurrent traces run their calls in op tasks, other processes than the
+test's. A private ETS table, per-process state or a database sandbox in
+manual mode doesn't reach them. `traces: :sequential` or `traces: :concurrent`
+splits one model's traces between two modules, so the sequential ones stay
+in the async module and the concurrent ones run where op tasks can see the
+data:
+
+```elixir
+defmodule MyApp.RaceTraceTest do
+  use MyApp.DataCase, async: true
+  use AshQuint.Case, model: :race, adapter: MyApp.RaceTrace, traces: :sequential
+end
+
+defmodule MyApp.RaceConcurrentTraceTest do
+  use MyApp.UnboxedCase, async: false
+
+  use AshQuint.Case,
+    model: :race,
+    adapter: MyApp.RaceTrace,
+    traces: :concurrent,
+    sensitivity: true,
+    replay: [settle_timeout: 1_000]
+end
+```
+
+`traces:` is `:all` (the default), `:sequential` or `:concurrent`; a
+selection with no trace is a compile error. Each module has its own
+staleness test, and the sensitivity check runs over its traces only. The
+`quint_concurrent` tag selects the concurrent replays across modules:
+`mix test --only quint_concurrent`.
+
+`replay:` passes the replay's timeouts (`settle_timeout`, `step_timeout`,
+`complete_timeout` and `gate_timeout`, in ms; see "Concurrent calls");
+any other key is a compile error.
 
 If your model files aren't committed (they live in an ignored planning
 directory, say), set `on_missing_model: :skip`. The staleness test is then
@@ -600,7 +637,19 @@ fail:
 - **Dropped call.** For each action that makes system calls, the first call
   that changes the model's state is skipped instead of made. The replay must
   fail at that step or later. A rejected call, or one that changes nothing,
-  can't be detected when dropped, so it isn't picked.
+  can't be detected when dropped, so it isn't picked. An op's completion
+  is a call: dropped, its op is never released and is cancelled at the
+  end. So is an op's start: dropped, the op never runs, and its advances
+  and completion are skips. A start counts as changing the state when its
+  op's completion does. Advances are never dropped.
+- **Serialized op.** For each action that starts ops, the first op that
+  overlaps another op (in the first trace where one does) runs through
+  every gate to completion at its start; its result is held until its
+  completion step. The replay must fail at the start or later. A
+  serialization that passes means the replay didn't observe the overlap:
+  the gates aren't wired, the race window lies outside them, or the
+  projection is blind to it. Some overlaps don't matter, so the next
+  overlapping trace is tried until one detects it.
 
 The test fails when a mutant survives, and when something is untested:
 
@@ -610,6 +659,8 @@ perturbed "counts" at random 0 step 3 was not detected
 dropped Reset at random 1 step 6 was not detected
 key "plans" never changes in any trace
 no step of Refresh changes the state
+serializing IncStart is never detected
+IncStart never overlaps another op in any trace
 ```
 
 An untested key or action usually means a coverage gap: a path no random
@@ -624,8 +675,14 @@ use AshQuint.Case,
   sensitivity: [allow_untested: [keys: ["plans"], actions: ["Refresh"]]]
 ```
 
-`sensitivity: true` is `[allow_untested: []]`. An allow-listed key or
-action that turns out to be tested, or that the check doesn't know, also
+A start action whose serialization is never detected, or whose ops never
+overlap, is allow-listed with `interleavings:`
+(`[allow_untested: [interleavings: ["IncStart"]]]`); first check whether a
+scenario that overlaps its ops, or a gate in the race window, would test
+it.
+
+`sensitivity: true` is `[allow_untested: []]`. An allow-listed key,
+action or interleaving that turns out to be tested, or that the check doesn't know, also
 fails the test, so the list can't go stale. Actions that only ever return
 `{:skip, …}` make no system call and are never checked (the counter's
 `Peek`). The `sensitivity:` value must be a literal: the lists can be

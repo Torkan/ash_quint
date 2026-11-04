@@ -186,6 +186,7 @@ defmodule AshQuint.SensitivityTest do
     states = [init(), inc(1, 1), inc(3, 2), inc(3, 1, {:rejected, "too_big"}), reset()]
 
     assert check(ToyAdapter, [states]) == %{
+             never_overlap: [],
              survived: [],
              untested: [],
              tested: [{:key, "count"}, {:call, "Inc"}, {:call, "Reset"}]
@@ -216,6 +217,7 @@ defmodule AshQuint.SensitivityTest do
     ]
 
     assert check(ExtraExpectedAdapter, [states]) == %{
+             never_overlap: [],
              survived: [],
              untested: [{:call, "Tick"}],
              tested: [{:key, "count"}, {:call, "Inc"}]
@@ -229,6 +231,7 @@ defmodule AshQuint.SensitivityTest do
     states = [init(), peek(0), inc(1, 1)]
 
     assert check(LeakyAdapter, [states]) == %{
+             never_overlap: [],
              survived: [{:perturb, "random t", 2, "count"}, {:drop, "random t", 2, "Inc"}],
              untested: [],
              tested: [{:key, "count"}, {:call, "Inc"}]
@@ -259,6 +262,7 @@ defmodule AshQuint.SensitivityTest do
     states = [init(), inc(1, 1), reset()]
 
     assert check(ToyAdapterBlindReset, [states]) == %{
+             never_overlap: [],
              survived: [{:drop, "random t", 2, "Reset"}],
              untested: [],
              tested: [{:key, "count"}, {:call, "Inc"}, {:call, "Reset"}]
@@ -269,6 +273,7 @@ defmodule AshQuint.SensitivityTest do
     states = [init(), begin(0, 2), commit(2)]
 
     assert check(ToyAdapter, [states]) == %{
+             never_overlap: [],
              survived: [],
              untested: [],
              tested: [{:key, "count"}, {:call, "Commit"}]
@@ -324,7 +329,8 @@ defmodule AshQuint.SensitivityTest do
     result = %{
       survived: [{:perturb, "random t", 1, "count"}, {:drop, "random t", 1, "Inc"}],
       untested: [{:key, "limit"}, {:call, "Peek"}],
-      tested: []
+      tested: [],
+      never_overlap: []
     }
 
     assert Sensitivity.format(result) ==

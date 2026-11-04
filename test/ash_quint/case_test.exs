@@ -1,7 +1,14 @@
 defmodule AshQuint.CaseTest do
   use ExUnit.Case, async: true
 
-  alias AshQuint.Test.{ToyAdapter, ToyAdapterBlindReset, ToyAdapterConstant, ToyAdapterLimit}
+  alias AshQuint.Test.{
+    ConcurrentToyAdapter,
+    ConcurrentToyAdapterBlind,
+    ToyAdapter,
+    ToyAdapterBlindReset,
+    ToyAdapterConstant,
+    ToyAdapterLimit
+  }
 
   @config "test/fixtures/case/ash_quint.exs"
 
@@ -293,7 +300,7 @@ defmodule AshQuint.CaseTest do
     for {source, description} <- [
           {"[allow: []]", "unknown sensitivity option :allow; expected allow_untested"},
           {"[allow_untested: [key: []]]",
-           "unknown allow_untested option :key; expected keys or actions"},
+           "unknown allow_untested option :key; expected keys, actions or interleavings"},
           {"[allow_untested: [keys: [:count]]]",
            "allow_untested keys must be a literal list of strings or a ~w sigil, got [:count]"},
           {"[allow_untested: [actions: \"Peek\"]]",
@@ -308,7 +315,7 @@ defmodule AshQuint.CaseTest do
           {"[allow_untested: [keys: @keys]]",
            "allow_untested keys must be a literal list of strings or a ~w sigil, got @keys"},
           {"[allow_untested: :all]",
-           "allow_untested must be a keyword list of keys and actions, got :all"},
+           "allow_untested must be a keyword list of keys, actions and interleavings, got :all"},
           {"[1]",
            "sensitivity must be true, false or [allow_untested: [keys: [...], actions: [...]]], " <>
              "got [1]"},
@@ -344,5 +351,159 @@ defmodule AshQuint.CaseTest do
 
     refute Path.expand("test/fixtures/case/missing_skip/model.qnt") in resources
     assert Path.expand("test/fixtures/case/missing_skip/manifest.json") in resources
+  end
+
+  describe "concurrent traces" do
+    # Compiles a test module for `model` with `adapter` and extra options
+    # given as source.
+    defp compile_with(model, adapter, extra) do
+      mod = Module.concat(__MODULE__, "Gen#{System.unique_integer([:positive])}")
+
+      Code.compile_string("""
+      defmodule #{inspect(mod)} do
+        use ExUnit.Case, register: false
+
+        use AshQuint.Case,
+          config: #{inspect(@config)},
+          model: #{inspect(model)},
+          adapter: #{inspect(adapter)}#{extra}
+      end
+      """)
+
+      mod
+    end
+
+    defp compile_with_error(model, extra) do
+      error =
+        assert_raise CompileError, fn -> compile_with(model, ConcurrentToyAdapter, extra) end
+
+      error.description
+    end
+
+    test "concurrent traces are tagged quint_concurrent: true" do
+      mod = compile_with(:concurrent, ConcurrentToyAdapter, "")
+      tests = tests(mod)
+
+      assert %{quint: :scenario, quint_model: :concurrent, quint_concurrent: true} =
+               tests[:"test scenario overlapTest"]
+
+      refute Map.has_key?(tests[:"test random 0"], :quint_concurrent)
+      refute Map.has_key?(tests[:"test traces for concurrent are current"], :quint_concurrent)
+      assert run_test(mod, "scenario overlapTest") == :ok
+      assert run_test(mod, "random 0") == :ok
+    end
+
+    test "traces: :sequential defines only sequential replays" do
+      sequential = tests(compile_with(:concurrent, ConcurrentToyAdapter, ", traces: :sequential"))
+
+      assert Enum.sort(Map.keys(sequential)) == [
+               :"test random 0",
+               :"test traces for concurrent are current"
+             ]
+
+      concurrent = tests(compile_with(:concurrent, ConcurrentToyAdapter, ", traces: :concurrent"))
+
+      assert Enum.sort(Map.keys(concurrent)) == [
+               :"test scenario overlapTest",
+               :"test traces for concurrent are current"
+             ]
+
+      all = tests(compile_with(:concurrent, ConcurrentToyAdapter, ", traces: :all"))
+      assert map_size(all) == 3
+    end
+
+    test "sensitivity runs over the selected traces" do
+      # The sequential trace alone has no starts, so no interleaving target.
+      mod =
+        compile_with(
+          :concurrent,
+          ConcurrentToyAdapterBlind,
+          ", traces: :sequential, sensitivity: true"
+        )
+
+      assert run_test(mod, "sensitivity of concurrent") == :ok
+
+      mod =
+        compile_with(
+          :concurrent,
+          ConcurrentToyAdapterBlind,
+          ", traces: :concurrent, sensitivity: true"
+        )
+
+      error =
+        assert_raise ExUnit.AssertionError, fn -> run_test(mod, "sensitivity of concurrent") end
+
+      assert error.message ==
+               "sensitivity of :concurrent:\nserializing IncStart is never detected"
+    end
+
+    test "traces: :concurrent with no concurrent traces is a compile error" do
+      assert compile_with_error(:ok, ", traces: :concurrent") ==
+               "traces: :concurrent selects no trace of :ok; " <>
+                 "test/fixtures/case/ok/manifest.json has no concurrent traces"
+    end
+
+    test "an invalid traces: is a compile error" do
+      assert compile_with_error(:ok, ", traces: :some") ==
+               "traces must be :all, :sequential or :concurrent, got :some"
+    end
+
+    test "allow_untested interleavings: accepts ~w and lists, and a stale entry fails" do
+      for allowed <- [~s(["IncStart"]), "~w(IncStart)"] do
+        sensitivity = ", sensitivity: [allow_untested: [interleavings: #{allowed}]]"
+        mod = compile_with(:concurrent, ConcurrentToyAdapterBlind, sensitivity)
+        assert run_test(mod, "sensitivity of concurrent") == :ok
+      end
+
+      sensitivity = ~s(, sensitivity: [allow_untested: [interleavings: ["IncStart", "Nope"]]])
+      mod = compile_with(:concurrent, ConcurrentToyAdapter, sensitivity)
+
+      error =
+        assert_raise ExUnit.AssertionError, fn -> run_test(mod, "sensitivity of concurrent") end
+
+      assert error.message ==
+               """
+               sensitivity of :concurrent:
+               interleaving "IncStart" is allowed untested but is tested; \
+               remove it from allow_untested
+               interleaving "Nope" is allowed untested but starts no op in any trace; \
+               remove it from allow_untested\
+               """
+    end
+
+    test "allow_untested interleavings: must be strings" do
+      assert compile_with_error(:ok, ", sensitivity: [allow_untested: [interleavings: [:a]]]") ==
+               "allow_untested interleavings must be a literal list of strings or a ~w sigil, " <>
+                 "got [:a]"
+    end
+
+    test "replay: options reach Replay.run!/3" do
+      mod = compile_with(:concurrent, ConcurrentToyAdapter, ", replay: [gate_timeout: 0]")
+      error = assert_raise ExUnit.AssertionError, fn -> run_test(mod, "scenario overlapTest") end
+      assert error.message =~ "gate :requested of op \"o1\" was not released within 0ms"
+
+      mod =
+        compile_with(
+          :concurrent,
+          ConcurrentToyAdapter,
+          ", replay: [settle_timeout: 100, step_timeout: 200, complete_timeout: 300, " <>
+            "gate_timeout: 400]"
+        )
+
+      assert run_test(mod, "scenario overlapTest") == :ok
+    end
+
+    test "unknown replay: key is a compile error" do
+      assert compile_with_error(:ok, ", replay: [settle: 10]") ==
+               "unknown replay option :settle; expected settle_timeout, step_timeout, " <>
+                 "complete_timeout or gate_timeout"
+
+      assert compile_with_error(:ok, ", replay: 10") ==
+               "replay must be a keyword list of settle_timeout, step_timeout, " <>
+                 "complete_timeout and gate_timeout, got 10"
+
+      assert compile_with_error(:ok, ", replay: [gate_timeout: -1]") ==
+               "replay option gate_timeout must be a non-negative integer, got -1"
+    end
   end
 end

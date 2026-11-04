@@ -236,3 +236,34 @@ defmodule AshQuint.Test.ConcurrentToyAdapter do
     :ok
   end
 end
+
+defmodule AshQuint.Test.ConcurrentToyAdapterBlind do
+  @moduledoc false
+  # The concurrent toy adapter with a projection blind until completion:
+  # expected/2 takes an IncStart's count from the system instead of the
+  # model, so an op that runs to completion at its start goes unnoticed
+  # there.
+  use AshQuint.Adapter
+
+  alias AshQuint.Step
+  alias AshQuint.Test.ConcurrentToyAdapter
+
+  @impl true
+  defdelegate init(trace, opts), to: ConcurrentToyAdapter
+
+  @impl true
+  defdelegate step(ctx, step), to: ConcurrentToyAdapter
+
+  @impl true
+  defdelegate project(ctx), to: ConcurrentToyAdapter
+
+  @impl true
+  def expected(ctx, %Step{action_taken: "IncStart"}), do: ConcurrentToyAdapter.project(ctx)
+  def expected(_ctx, %Step{state: state}), do: Map.take(state, ["count"])
+
+  @impl true
+  defdelegate outcome(result), to: ConcurrentToyAdapter
+
+  @impl true
+  defdelegate finish(ctx, result), to: ConcurrentToyAdapter
+end

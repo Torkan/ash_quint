@@ -36,7 +36,9 @@ mix hex.build                              # no test/, config/, agent-plans/
 - `AshQuint.Gate` — gates (`checkpoint/1`) and the op-task primitives;
   `AshQuint.Application` starts `AshQuint.Gate.Table`, the ETS table that
   registers op tasks.
-- `AshQuint.Sensitivity` — mutants and untested keys and actions.
+- `AshQuint.Sensitivity` — mutants (perturbed key, dropped call or op
+  start/completion, serialized op) and untested keys, actions and
+  interleavings; `overlaps/1` over a replay report.
 - `AshQuint.Config`, `AshQuint.Manifest`, `AshQuint.Gen`,
   `Mix.Tasks.AshQuint.Gen` — `ash_quint.exs`, the manifest and
   `mix ash_quint.gen`.
@@ -59,7 +61,8 @@ mix hex.build                              # no test/, config/, agent-plans/
   switchable faults for the Replay and Sensitivity tests;
   `test/support/concurrent_toy_adapter.ex` — its concurrent counterpart
   (an Agent-backed counter, gates and a lock) for the concurrent replay
-  tests.
+  tests, plus `ConcurrentToyAdapterBlind`, whose projection is blind until
+  completion, for the serialization mutant.
 
 ## Quint
 

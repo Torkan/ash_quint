@@ -1,0 +1,44 @@
+{
+  "ash_quint": 2,
+  "models": {
+    "test/fixtures/case/concurrent/model.qnt": "sha256:e1aa289cf16ece28dfb5e45c7be532b423bd3b394c3abde7162d42d8f3db6629"
+  },
+  "quint": "0.33.1",
+  "seed": 7,
+  "traces": [
+    {
+      "actions": {
+        "Inc": 2
+      },
+      "file": "random_0.itf.json",
+      "name": "0",
+      "outcomes": {
+        "Inc": {
+          "accepted": 2
+        }
+      },
+      "source": "random",
+      "steps": 2
+    },
+    {
+      "actions": {
+        "IncDone": 2,
+        "IncStart": 2
+      },
+      "concurrent": true,
+      "file": "scenario_overlapTest.itf.json",
+      "max_in_flight": 2,
+      "name": "overlapTest",
+      "outcomes": {
+        "IncDone": {
+          "accepted": 2
+        },
+        "IncStart": {
+          "pending": 2
+        }
+      },
+      "source": "scenario",
+      "steps": 4
+    }
+  ]
+}
