@@ -195,23 +195,23 @@ defmodule AshQuint.ITFTest do
              "x.json at $: not an ITF trace (needs vars and states lists)"
   end
 
+  # The atom count is VM-wide, so other async tests would make a before/after
+  # comparison flaky. Instead, check that the trace's unique strings never
+  # became atoms.
   test "creates no atoms" do
-    json = fn ->
-      tag = "tag_#{System.unique_integer([:positive])}"
-      key = "key_#{System.unique_integer([:positive])}"
+    tag = "tag_#{System.unique_integer([:positive])}"
+    key = "key_#{System.unique_integer([:positive])}"
 
-      Jason.encode!(%{
-        "vars" => [key],
-        "states" => [%{"#meta" => %{}, key => %{"tag" => tag, "value" => %{key => 1}}}]
-      })
+    %{
+      "vars" => [key],
+      "states" => [%{"#meta" => %{}, key => %{"tag" => tag, "value" => %{key => 1}}}]
+    }
+    |> Jason.encode!()
+    |> Jason.decode!()
+    |> ITF.decode!("mem")
+
+    for string <- [tag, key] do
+      assert_raise ArgumentError, fn -> String.to_existing_atom(string) end
     end
-
-    decode = fn binary -> binary |> Jason.decode!() |> ITF.decode!("mem") end
-
-    decode.(json.())
-    binary = json.()
-    before = :erlang.system_info(:atom_count)
-    decode.(binary)
-    assert :erlang.system_info(:atom_count) == before
   end
 end
