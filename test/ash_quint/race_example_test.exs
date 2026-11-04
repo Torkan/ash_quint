@@ -1,55 +1,49 @@
 defmodule AshQuint.RaceExampleTest do
-  # The race example's committed traces (priv/examples/race) follow the
-  # concurrency convention: starts are Pending and carry an op. Replaying
-  # them needs concurrent replay, which isn't there yet, so a sequential
-  # adapter is refused with a pointer to the start/complete API.
+  # The race example end to end: every committed trace of
+  # priv/examples/race replays concurrently against the Ash resource, with
+  # the atomic :inc_atomic action. The read-modify-write :inc loses an
+  # update in raceTest.
   use ExUnit.Case, async: true
 
+  use AshQuint.Case,
+    model: :race,
+    adapter: AshQuint.Test.RaceAdapter
+
   alias AshQuint.{Config, Manifest, Replay, Step, Trace}
+  alias AshQuint.Test.RaceAdapter
 
   @out "priv/examples/race/traces"
 
-  defmodule SequentialAdapter do
-    @moduledoc false
-    # Defers each IncStart and makes the call at its IncDone: the most a
-    # sequential adapter can do.
-    use AshQuint.Adapter
-
-    @impl true
-    def init(_trace, _opts), do: {:ok, %{count: 0, writes: 0, pending: nil}}
-
-    @impl true
-    def step(ctx, %Step{action_taken: "IncStart", nondet_picks: %{"by" => by}}),
-      do: {:pending, %{ctx | pending: by}}
-
-    def step(%{pending: by} = ctx, %Step{action_taken: "IncDone"}) do
-      ctx = %{ctx | count: ctx.count + by, writes: ctx.writes + 1, pending: nil}
-      {:ok, :ok, ctx}
-    end
-
-    @impl true
-    def project(ctx), do: %{"count" => ctx.count, "writes" => ctx.writes}
-  end
-
   defp manifest, do: Manifest.read!(Path.join(@out, "manifest.json"))
 
-  defp load(entry) do
-    Trace.load!(Path.join(@out, entry.file),
+  defp load(file) do
+    entry = Enum.find(manifest().traces, &(&1.file == file))
+
+    Trace.load!(Path.join(@out, file),
       name: entry.name,
       source: entry.source,
       seed: manifest().seed
     )
   end
 
-  defp entry(file), do: Enum.find(manifest().traces, &(&1.file == file))
+  defp model, do: Config.model!(Config.load!(), :race)
+
+  defp replay(file, adapter_opts \\ []) do
+    model = model()
+
+    Replay.run(RaceAdapter, load(file),
+      model: :race,
+      pending_result: model.pending_result,
+      op_field: model.op_field,
+      adapter_opts: adapter_opts
+    )
+  end
 
   test "every race trace is concurrent, and raceTest has both ops in flight" do
     assert Enum.all?(manifest().traces, & &1.concurrent)
 
     assert %{max_in_flight: 2, actions: %{"IncStart" => 2, "IncDone" => 2}} =
-             entry("scenario_raceTest.itf.json")
-
-    assert %{max_in_flight: 2} = entry("witness_witOverlap.itf.json")
+             Enum.find(manifest().traces, &(&1.file == "scenario_raceTest.itf.json"))
   end
 
   test "the counter's manifest stays sequential" do
@@ -59,9 +53,8 @@ defmodule AshQuint.RaceExampleTest do
   end
 
   test "raceTest decodes to Pending starts and completions with outcomes" do
-    model = Config.model!(Config.load!(), :race)
-    opts = [pending_result: model.pending_result, op_field: model.op_field]
-    trace = load(entry("scenario_raceTest.itf.json"))
+    opts = [pending_result: model().pending_result, op_field: model().op_field]
+    trace = load("scenario_raceTest.itf.json")
 
     steps =
       for {state, index} <- Enum.with_index(trace.states), index >= 1 do
@@ -77,15 +70,37 @@ defmodule AshQuint.RaceExampleTest do
            ]
   end
 
-  test "a sequential replay refuses raceTest, naming the start/complete API" do
-    trace = load(entry("scenario_raceTest.itf.json"))
+  test "raceTest against :inc fails at step 4 (IncDone) on the outcome and on writes" do
+    assert {:error, failure} = replay("scenario_raceTest.itf.json", action: :inc)
+    assert %{index: 4, action: "IncDone"} = failure
 
-    assert {:error, failure} = Replay.run(SequentialAdapter, trace, model: :race)
-    assert %{index: 2, action: "IncStart"} = failure
+    assert failure.message ==
+             "race scenario raceTest, step 4 (IncDone), seed 20261104: " <>
+               "op \"o1\" (started at step 1): " <>
+               "outcome: expected {:rejected, \"over_limit\"}, got :accepted\n" <>
+               "key \"writes\":\n  expected: 1\n  actual:   2"
+  end
 
-    assert failure.message =~
-             "race scenario raceTest, step 2 (IncStart), seed 20261104: interleaved trace: "
+  test "raceTest against :inc_atomic holds both ops at their gate until they complete" do
+    assert {:ok, report} = replay("scenario_raceTest.itf.json")
 
-    assert failure.message =~ "{:start, op, call, ctx} and {:complete, op, ctx}"
+    assert Enum.map(report.synced, &{&1.kind, &1.op, &1.expected}) == [
+             {:start, "o1", %{"count" => 0, "writes" => 0}},
+             {:start, "o2", %{"count" => 0, "writes" => 0}},
+             {:complete, "o2", %{"count" => 2, "writes" => 1}},
+             {:complete, "o1", %{"count" => 2, "writes" => 1}}
+           ]
+  end
+
+  test "witness_witOverlap ends with both ops in flight and passes" do
+    trace = load("witness_witOverlap.itf.json")
+    opts = [pending_result: model().pending_result, op_field: model().op_field]
+    {:ok, last} = Step.from_state(List.last(trace.states), length(trace.states) - 1, opts)
+    assert last.result == :pending
+
+    assert {:ok, report} = replay("witness_witOverlap.itf.json")
+    assert List.last(report.synced).kind == :start
+
+    assert {:ok, _report} = replay("witness_witOverlap.itf.json", action: :inc)
   end
 end

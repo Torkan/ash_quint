@@ -30,12 +30,23 @@ defmodule AshQuint.Test.TraceBuilder do
   def begin(count, by), do: state(count, {:variant, "Begin", by})
   def commit(count, result \\ :accepted), do: state(count, {:variant, "Commit", {}}, result)
 
+  def inc_start(count, op, by),
+    do: state(count, {:variant, "IncStart", %{"op" => op, "by" => by}}, :pending)
+
+  def inc_advance(count, op), do: state(count, {:variant, "IncRead", %{"op" => op}}, :pending)
+
+  def inc_done(count, op, result \\ :accepted),
+    do: state(count, {:variant, "IncDone", %{"op" => op}}, result)
+
+  def wait_op(count, op), do: state(count, {:variant, "WaitOp", %{"op" => op}})
+
   defp state(count, action, result \\ :accepted) do
     %{"count" => count, "lastAction" => action, "lastResult" => result(result)}
   end
 
   defp result(:accepted), do: @accepted
   defp result({:rejected, code}), do: {:variant, "Rejected", code}
+  defp result(:pending), do: {:variant, "Pending", {}}
 end
 
 defmodule AshQuint.Test.ToyAdapter do

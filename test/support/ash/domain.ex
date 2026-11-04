@@ -4,5 +4,6 @@ defmodule AshQuint.Test.Domain do
 
   resources do
     resource AshQuint.Test.Counter
+    resource AshQuint.Test.RaceCounter
   end
 end

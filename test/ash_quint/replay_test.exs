@@ -7,9 +7,7 @@ defmodule AshQuint.ReplayTest do
   alias AshQuint.Test.{ToyAdapter, ToyAdapterMissingKey, ToyAdapterNoReset}
 
   @prefix "counter random t, step"
-  @interleaved "interleaved trace: calls overlap here. Replaying them needs concurrent " <>
-                 "replay (step/2 returning {:start, op, call, ctx} and {:complete, op, ctx}), " <>
-                 "which this version of ash_quint doesn't support yet"
+  @use_start "use {:start, op, call, ctx} and {:complete, op, ctx} for calls that stay in flight"
 
   defmodule SkipAll do
     @moduledoc false
@@ -186,6 +184,11 @@ defmodule AshQuint.ReplayTest do
     assert report.initial_expected == %{"count" => 0}
   end
 
+  test "synced entries carry op: nil for sequential steps" do
+    assert {:ok, report} = run(clean())
+    assert Enum.all?(report.synced, &(&1.op == nil))
+  end
+
   test "outcome mismatch" do
     assert message(clean(), [:wrong_code]) ==
              ~s(counter random t, step 3 \(Inc\), seed 7: outcome: expected {:rejected, "too_big"}, got {:rejected, "other"})
@@ -253,16 +256,20 @@ defmodule AshQuint.ReplayTest do
 
   test "second pending is refused" do
     assert message([init(), begin(0, 1), begin(0, 2)]) ==
-             "#{@prefix} 2 (Begin), seed 7: #{@interleaved}"
+             "#{@prefix} 2 (Begin), seed 7: interleaved trace: two {:pending, …} steps " <>
+               "overlap; #{@use_start}"
   end
 
   test "skip while pending is refused" do
     assert message([init(), begin(0, 1), peek(0)]) ==
-             "#{@prefix} 2 (Peek), seed 7: #{@interleaved}"
+             "#{@prefix} 2 (Peek), seed 7: interleaved trace: {:skip, …} while a " <>
+               "{:pending, …} step is open; #{@use_start}"
   end
 
   test "trace ending pending is refused" do
-    assert message([init(), begin(0, 1)]) == "#{@prefix} 1 (Begin), seed 7: #{@interleaved}"
+    assert message([init(), begin(0, 1)]) ==
+             "#{@prefix} 1 (Begin), seed 7: interleaved trace: the trace ends with this " <>
+               "{:pending, …} step open; #{@use_start}"
   end
 
   describe "a step the model keeps in flight (Pending)" do
@@ -277,8 +284,7 @@ defmodule AshQuint.ReplayTest do
     test "refuses {:ok, …}" do
       assert message([init(), in_flight("Inc")]) ==
                "#{@prefix} 1 (Inc), seed 7: the model keeps Inc in flight (lastResult Pending), " <>
-                 "but step/2 returned {:ok, …}; return {:pending, ctx} when a later step " <>
-                 "completes the call (concurrent replay with {:start, …} isn't supported yet)"
+                 "but step/2 returned {:ok, …}"
     end
 
     test "refuses {:skip, …}" do
@@ -325,13 +331,15 @@ defmodule AshQuint.ReplayTest do
   test "bad return value" do
     assert message(clean(), [:bad_return]) ==
              "#{@prefix} 1 (Inc), seed 7: step/2 returned :ok; " <>
-               "expected {:ok, result, ctx}, {:pending, ctx} or {:skip, ctx}"
+               "expected {:ok, result, ctx}, {:pending, ctx}, {:skip, ctx}, " <>
+               "{:start, op, call, ctx}, {:advance, op, ctx} or {:complete, op, ctx}"
   end
 
   test "an {:error, _} return value is a bad return value" do
     assert message(clean(), [], adapter: ErrorReturn) ==
              "#{@prefix} 1 (Inc), seed 7: step/2 returned {:error, :boom}; " <>
-               "expected {:ok, result, ctx}, {:pending, ctx} or {:skip, ctx}"
+               "expected {:ok, result, ctx}, {:pending, ctx}, {:skip, ctx}, " <>
+               "{:start, op, call, ctx}, {:advance, op, ctx} or {:complete, op, ctx}"
   end
 
   test "wrong initial action" do
@@ -491,7 +499,7 @@ defmodule AshQuint.ReplayTest do
 
     test "gets the ctx of a pending step when the trace ends pending" do
       assert {:error, failure} = finishing([init(), begin(0, 2)])
-      assert failure.message =~ @interleaved
+      assert failure.message =~ "the trace ends with this {:pending, …} step open"
       assert {%{pending: 2}, {:error, ^failure}} = assert_finished_once()
     end
 

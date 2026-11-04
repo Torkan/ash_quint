@@ -31,7 +31,11 @@ mix hex.build                              # no test/, config/, agent-plans/
 - `AshQuint.ITF`, `AshQuint.Trace`, `AshQuint.Step` — ITF decoding, traces,
   steps.
 - `AshQuint.Adapter`, `AshQuint.Names`, `AshQuint.Replay` — the adapter
-  behaviour and the replay.
+  behaviour and the replay; `AshQuint.Replay.Ops` (internal) — the ops in
+  flight during a concurrent replay.
+- `AshQuint.Gate` — gates (`checkpoint/1`) and the op-task primitives;
+  `AshQuint.Application` starts `AshQuint.Gate.Table`, the ETS table that
+  registers op tasks.
 - `AshQuint.Sensitivity` — mutants and untested keys and actions.
 - `AshQuint.Config`, `AshQuint.Manifest`, `AshQuint.Gen`,
   `Mix.Tasks.AshQuint.Gen` — `ash_quint.exs`, the manifest and
@@ -47,12 +51,15 @@ mix hex.build                              # no test/, config/, agent-plans/
   Regenerate with `MIX_ENV=test mix ash_quint.gen counter`.
 - `priv/examples/race/` — the concurrency example (start/complete actions
   over op ids, `Pending` results) and its committed traces, configured in
-  the root `ash_quint.exs` too. It has no adapter yet: concurrent replay
-  isn't implemented, and `race_example_test` checks that its traces are
-  refused. Regenerate with `MIX_ENV=test mix ash_quint.gen race`.
+  the root `ash_quint.exs` too. Its adapter is `test/support/race_adapter.ex`
+  (against `test/support/ash/race_counter.ex`, a non-private ETS resource).
+  Regenerate with `MIX_ENV=test mix ash_quint.gen race`.
 - `test/support/counter_adapter.ex` — the reference adapter, linked from the
   README; `test/support/toy_adapter.ex` — an in-memory adapter with
-  switchable faults for the Replay and Sensitivity tests.
+  switchable faults for the Replay and Sensitivity tests;
+  `test/support/concurrent_toy_adapter.ex` — its concurrent counterpart
+  (an Agent-backed counter, gates and a lock) for the concurrent replay
+  tests.
 
 ## Quint
 

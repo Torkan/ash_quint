@@ -22,6 +22,7 @@ defmodule AshQuint.MixProject do
 
   def application do
     [
+      mod: {AshQuint.Application, []},
       extra_applications: [:logger]
     ]
   end
@@ -59,6 +60,7 @@ defmodule AshQuint.MixProject do
           AshQuint,
           AshQuint.Case,
           AshQuint.Adapter,
+          AshQuint.Gate,
           AshQuint.Names,
           AshQuint.Replay,
           AshQuint.Sensitivity,

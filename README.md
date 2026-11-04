@@ -133,9 +133,11 @@ type Result = Accepted | Rejected(str) | Pending
   completes. One call completes per step, so one `lastResult` is enough.
 - **In-flight bookkeeping is ordinary model state** (`inflight: str -> int`).
   The adapter doesn't project it.
-- **Model what the system visibly shows.** Concurrent replay will compare
-  every step's state, starts included, while calls are in flight, so
-  uncommitted writes don't belong in projected variables.
+- **Model what the system visibly shows.** The replay compares every
+  step's state, starts included, while calls are in flight, so uncommitted
+  writes don't belong in projected variables. An invariant that holds only
+  when nothing is in flight is wrong here: Quint checks the model's on every
+  state too.
 - **Interleaving points are a model choice.** `IncStart` and `IncDone` give
   "requested" and "returned"; split the action further (`IncRead`) for more.
 
@@ -146,11 +148,9 @@ with the most calls in flight at once as `"max_in_flight"`. See the
 example: two `Inc`s against a limit, and a scenario where both start before
 either returns.
 
-Replaying overlapping calls needs concurrent replay, which isn't there yet:
-an adapter can return `{:pending, ctx}` for one start at a time, and a trace
-in which calls overlap fails as an interleaved trace (see
-[Limitations](#limitations)). A `Pending` step whose `step/2` returns
-`{:ok, …}` or `{:skip, …}` fails too.
+The replay runs each in-flight call in its own process and holds it at
+gates while other steps run; see [Concurrent calls](#concurrent-calls) for
+the adapter's side.
 
 ## Configuration: `ash_quint.exs`
 
@@ -367,10 +367,13 @@ The callbacks:
     completes (a create that a later commit finishes). Nothing is compared
     until that step returns `{:ok, …}`;
   - `{:skip, ctx}` for a model-only step: the state is compared, no outcome
-    is asserted.
+    is asserted;
+  - `{:start, op, call, ctx}`, `{:advance, op, ctx}` and
+    `{:complete, op, ctx}` for calls that stay in flight while other steps
+    run: see [Concurrent calls](#concurrent-calls).
 
-  A trace with two pending steps open, a skip while one is pending, or a
-  pending step at the end fails: replays are sequential.
+  `{:pending, ctx}` is the sequential form: a trace with two pending steps
+  open, a skip while one is pending, or a pending step at the end fails.
 - **`project(ctx)`** returns the system's state, keyed by the model
   variables it covers, in the model's terms. Only those keys are compared.
 - **`expected(ctx, step)`** (optional) returns the model's value for each
@@ -408,6 +411,97 @@ Two rules matter in practice:
 - **Transition invariants go through `ctx`.** An invariant sees only the
   projection and `ctx`. One that compares a step with the one before keeps
   what it needs (the rows before the call, say) in `ctx`, from `step/2`.
+
+### Concurrent calls
+
+For a model that lets calls overlap (see [Concurrency](#concurrency)), the
+adapter starts the real call at the start step and the replay runs it in an
+**op task**, a process of its own, while the trace goes on:
+
+```elixir
+def step(ctx, %Step{action_taken: "IncStart", nondet_picks: %{"op" => op, "by" => by}}) do
+  call = fn -> MyApp.Counter |> Ash.get!(ctx.id) |> Ash.update(%{by: by}, action: :inc) end
+  {:start, op, call, ctx}
+end
+
+def step(ctx, %Step{action_taken: "IncDone", nondet_picks: %{"op" => op}}),
+  do: {:complete, op, ctx}
+```
+
+- **`{:start, op, call, ctx}`** runs `call` (no arguments; it makes the
+  system call and returns its result) in a new op task. `op` is normally
+  `step.op`; it must not already be in flight. The step must be `Pending`
+  in the trace.
+- **`{:advance, op, ctx}`** releases `op` from its gate and waits until it
+  stops at the next one. It is for models that split one call into more
+  than two steps (`IncStart`, `IncRead`, `IncDone`). The step must be
+  `Pending`.
+- **`{:complete, op, ctx}`** releases `op` through every remaining gate,
+  waits for its result and checks `outcome(result)` against the step's
+  `lastResult`, as for `{:ok, …}`. The step must not be `Pending`.
+- `{:ok, …}`, `{:skip, …}` and `{:pending, …}` still run in the test process
+  while ops are in flight.
+
+**Gates** are where an op task stops. Put `AshQuint.Gate.checkpoint/1` in the
+system's code path, where the race can happen:
+
+```elixir
+change fn changeset, _context ->
+  count = Ash.Changeset.get_data(changeset, :count)
+  AshQuint.Gate.checkpoint(:after_read)
+  # …
+end
+```
+
+Outside an op task it returns `:ok` at once, so it can stay in code that
+compiles for test (ash_quint is a test-only dependency: put it behind
+`if Mix.env() == :test`, or in a test-only change). Inside one, it waits for
+the replay. Processes the call starts with `Task` gate their op too, since
+the gate looks up `$callers`. Gate names are your own atoms (or tuples).
+
+**Settling.** After every step, the replay waits until each op in flight is
+at a gate or has finished, then compares the state and runs the invariants,
+on every step, starts included. An op that does neither within
+`settle_timeout` fails the step, unless it was started with
+`may_block: true`: then it counts as blocked (on a lock another op holds,
+say), and the replay waits for it again after the next release.
+
+Options, as a fifth element (`{:start, op, call, ctx, opts}`) or a fourth
+(`{:advance, op, ctx, opts}`):
+
+- `early: :ok` (start only): the call may finish before it reaches a gate.
+  Without it that fails: an op that returns at its start step overlapped
+  nothing. Its result is held until its completion step either way;
+- `may_block: true`: see Settling;
+- `at: name`: the gate the op must reach (the first one for a start, the
+  next one for an advance); another gate fails the step, naming both.
+
+A synchronous step (`{:ok, …}`) that blocks on something a gated op holds is
+released by a watchdog after `step_timeout`: it frees every gated op and
+fails the step. A gate that the replay doesn't release within `gate_timeout`
+returns anyway and fails the step the replay is on, so a wrong release order
+can't hang the test. A trace that ends with ops in flight passes: they are
+cancelled unchecked (random traces stop at `max_steps`, often mid-call).
+Every op task is stopped before `finish/2` runs, on every path, so
+`finish/2` can release what the ops used.
+
+The timeouts, `AshQuint.Replay.run/3` options in milliseconds:
+`settle_timeout` (default 500), `step_timeout` (2000), `complete_timeout`
+(5000, for a completed op's result) and `gate_timeout` (5000). `AshQuint.Case`
+uses the defaults.
+
+The race example's adapter,
+[`test/support/race_adapter.ex`](https://github.com/Torkan/ash_quint/blob/main/test/support/race_adapter.ex),
+replays every race trace against an ETS resource with an atomic increment;
+with its read-modify-write `:inc` action, `raceTest` fails at step 4 on the
+lost update. Two things it shows:
+
+- **Make the call do the read.** Fetch the record inside `call`, not in
+  `step/2`, so the read happens in the op task, between the gates.
+- **Op tasks are other processes.** A `private? true` ETS table is visible
+  only to its owner, so concurrent replays need a table that isn't private,
+  scoped by the ids the trace names. Database sandboxes allow op tasks
+  through `$callers`, but all of them share the test's connection.
 
 Helpers:
 
@@ -466,13 +560,33 @@ counter random 3, step 4 (Inc), seed 20261102: outcome: expected :accepted, got 
 The problems are an outcome mismatch, a failed system call
 (`{:failed, message}`), a missing `step/2` clause, a bad return value, a
 projected key that differs from the model (or has no expected value), a
-failing invariant, an interleaved trace, a `Pending` step that `step/2`
-didn't leave pending, an exception from `project/1`
+failing invariant, an interleaved trace (overlapping `{:pending, …}`
+steps), a model and adapter that disagree on which steps keep a call in
+flight, an op's problems (below), an exception from `project/1`
 or `expected/2` on the initial state (at step 0), and an `{:error, message}`
 from `finish/2` (at the last step). Other exceptions from the
 adapter propagate as they are, without the prefix. That includes a missing
 clause in a helper that `step/2` delegates to: only a `FunctionClauseError`
 from the adapter's own `step/2` is reported as a missing clause.
+
+With calls in flight, the problems include:
+
+```
+op "o1" (started at step 1): outcome: expected {:rejected, "over_limit"}, got :accepted
+op "o1" finished before reaching a gate; the model keeps it in flight until step 4
+op "o2" did not settle within 500ms; in flight: "o1" at gate :after_read (since step 1)
+complete of op "o3", which isn't in flight; in flight: "o1", "o2"
+op "o1" was started at step 1 and is started again
+op "o1" reached gate :after_read; the adapter expected :before_write
+the model keeps IncStart in flight (lastResult Pending), but step/2 returned {:ok, …}
+the model completes IncDone here, but step/2 returned {:start, "o1", …}
+op "o2" raised: ** (RuntimeError) boom
+step 4 (Reset) blocked for 2000ms while "o1" was held at gate :after_read
+gate :after_read of op "o1" was not released within 5000ms
+```
+
+A failure with ops in flight ends with an `in flight:` line, and the
+failure map's `in_flight` lists them (`%{op, started_at, at_gate}`).
 
 ## Sensitivity
 
@@ -530,9 +644,22 @@ written as `~w(plans)`, but not as module attributes or variables.
 
 ## Limitations
 
-- Replays are sequential: a trace whose calls overlap (two pending steps,
-  see [Concurrency](#concurrency)) is refused. Concurrent replay, with
-  `step/2` returning `{:start, …}` and `{:complete, …}`, is planned.
+- Concurrent replay controls only what reaches a gate. Gate releases happen
+  in the order the trace says, no op passes a gate before the step that
+  releases it, and the state is never projected while an op is between
+  gates. What happens between two gates (BEAM scheduling, the database's
+  locks, `after_action` hooks, jobs sent after a commit) isn't controlled:
+  if a race window has no gate, the replay may pass by luck, and a trace is
+  deterministic only when its gates cover every racing point.
+- Blocked ops are detected by timeout only (`may_block: true`), which is
+  timing-based.
+- Processes that don't carry `$callers` back to an op task (a GenServer
+  the call sends work to, say) aren't gated.
+- Op tasks are separate processes: private ETS tables and per-process state
+  aren't shared with them. With the Ecto sandbox in shared mode they all
+  use the test's connection and its one transaction, so races inside
+  transactions (row locks, isolation anomalies) need real connections;
+  database support is planned.
 - `random:` takes no invariants to check; any non-zero exit of
   `quint run` fails generation.
 - Model integers are limited to the signed 64-bit range by Quint.

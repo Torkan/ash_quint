@@ -6,17 +6,24 @@ defmodule AshQuint.Adapter do
   and `expected/2` on the initial state (step 0, action `init_action`) to
   record its expected values; nothing is compared there. It then calls
   `step/2` for every state after the initial one. After each step that
-  synced (`{:ok, …}` or `{:skip, …}`), it compares `project/1` with
+  synced (all but `{:pending, …}`), once the ops in flight have settled, it
+  compares `project/1` with
   `expected/2` on the keys `project/1` returns, and runs `invariants/0`.
   When the replay ends, pass or fail, it calls `finish/2`.
 
     * `init/2` builds the `ctx` for one trace. Use a map if you use
       `AshQuint.Names`.
     * `step/2` performs the step's action. Return `{:ok, result, ctx}` after
-      a system call, `{:pending, ctx}` when the action only starts a call
-      that a later step completes, or `{:skip, ctx}` for a model-only step
-      (state is compared, no outcome is asserted). A step whose result is
-      `Pending` (`step.result == :pending`) must return `{:pending, ctx}`.
+      a system call, `{:pending, ctx}` when the action only defers a call
+      that a later step makes (one at a time), or `{:skip, ctx}` for a
+      model-only step (state is compared, no outcome is asserted). For a
+      call that stays in flight while other steps run, return
+      `{:start, op, call, ctx}`: the replay runs `call` in an op task that
+      stops at `AshQuint.Gate` gates; `{:advance, op, ctx}` and
+      `{:complete, op, ctx}` release it at later steps (see
+      `t:step_result/0` and the README's "Concurrent calls"). A step whose
+      result is `Pending` (`step.result == :pending`) must return
+      `:start`, `:advance` or `:pending`.
     * `project/1` returns the system's state, keyed by the model variables
       it covers.
     * `expected/2` (optional) returns the model's value for each projected
@@ -32,7 +39,8 @@ defmodule AshQuint.Adapter do
 
   `finish(ctx, result)` is called exactly once for every replay whose
   `init/2` returned, with the latest `ctx` (including one returned with
-  `{:pending, ctx}`):
+  `{:pending, ctx}`), once every op task of the replay has stopped, so it can
+  release what `ctx` holds without racing them:
 
     * with `:ok` after the last step, once its comparison and invariants
       passed;
@@ -103,9 +111,39 @@ defmodule AshQuint.Adapter do
   @doc "Builds the `ctx` for one trace."
   @callback init(AshQuint.Trace.t(), opts :: keyword()) :: {:ok, ctx()}
 
+  @typedoc "An operation id: names a call that stays in flight across steps."
+  @type op :: String.t()
+
+  @typedoc """
+  Options of `{:start, op, call, ctx, opts}`:
+
+    * `early: :ok` — the call may finish before it reaches a gate (else
+      that is a failure; its result is held until its completion step);
+    * `may_block: true` — an op that neither reaches a gate nor finishes
+      within the settle timeout counts as blocked instead of failing;
+    * `at: name` — the first gate the op must reach.
+  """
+  @type start_opts :: [early: :ok, may_block: boolean(), at: AshQuint.Gate.name()]
+
+  @typedoc """
+  Options of `{:advance, op, ctx, opts}`: `at: name`, the gate the op must
+  reach next, and `may_block: true`, as for `t:start_opts/0`.
+  """
+  @type advance_opts :: [at: AshQuint.Gate.name(), may_block: boolean()]
+
+  @typedoc "What `step/2` returns."
+  @type step_result ::
+          {:ok, result :: term(), ctx()}
+          | {:pending, ctx()}
+          | {:skip, ctx()}
+          | {:start, op(), call :: (-> term()), ctx()}
+          | {:start, op(), call :: (-> term()), ctx(), start_opts()}
+          | {:advance, op(), ctx()}
+          | {:advance, op(), ctx(), advance_opts()}
+          | {:complete, op(), ctx()}
+
   @doc "Performs one step of the trace."
-  @callback step(ctx(), Step.t()) ::
-              {:ok, result :: term(), ctx()} | {:pending, ctx()} | {:skip, ctx()}
+  @callback step(ctx(), Step.t()) :: step_result()
 
   @doc "Returns the system state, keyed by the model variables it covers."
   @callback project(ctx()) :: map()

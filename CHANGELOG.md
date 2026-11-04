@@ -35,9 +35,23 @@
   table.
 - `priv/examples/race`: a model of two concurrent `Inc`s against a limit,
   with committed traces.
-- Replays are still sequential. The interleaved-trace failure now points at
-  the planned `{:start, …}`/`{:complete, …}` API, and a `Pending` step
-  whose `step/2` returns `{:ok, …}` or `{:skip, …}` fails.
+- Concurrent replay. `step/2` can return `{:start, op, call, ctx}`,
+  `{:advance, op, ctx}` and `{:complete, op, ctx}` (with options `early:`,
+  `may_block:` and `at:`): the replay runs `call` in an op task, holds it at
+  `AshQuint.Gate.checkpoint/1` gates while other steps run, releases it
+  where the trace says and checks its outcome at the completing step. Every
+  step's state is compared once the ops in flight have settled. The model
+  and the adapter must agree on which steps are `Pending`. A synchronous
+  step blocked by a gated op is released by a watchdog and fails; a trace
+  that ends with ops in flight passes, the ops cancelled. Every op task is
+  stopped before `finish/2`. New `AshQuint.Replay.run/3` options:
+  `settle_timeout`, `step_timeout`, `complete_timeout` and `gate_timeout`.
+  Failures with ops in flight say where each op is, also in the failure's
+  `in_flight`. `{:pending, ctx}` keeps its sequential rules; their failures
+  now point at `{:start, …}`. The `race` example replays against an ETS
+  resource (`test/support/race_adapter.ex`), and the lost update of its
+  read-modify-write action fails `raceTest` at step 4.
+- `:ash_quint` is now an OTP application: it starts the gate table.
 
 ## 0.1.0
 

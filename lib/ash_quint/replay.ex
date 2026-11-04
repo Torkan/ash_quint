@@ -8,22 +8,39 @@ defmodule AshQuint.Replay do
   values (nothing is compared). For every later state, in order:
 
     1. the state becomes an `AshQuint.Step`;
-    2. `adapter.step(ctx, step)` runs it;
-    3. `{:pending, ctx}` opens a pending step (a second one is refused);
-       `{:ok, result, ctx}` closes it, and its `outcome/1` must match the
-       step's result when the trace has one (`{:failed, msg}` always fails);
-       `{:skip, ctx}` asserts no outcome and is refused while a step is
-       pending; at a step whose result is `Pending` (the model keeps the
-       call in flight), `{:ok, …}` and `{:skip, …}` are refused;
-    4. after `:ok` or `:skip`, `project/1` must equal the expected values on
-       its keys, and every invariant must hold; all of a step's failures are
-       reported together;
-    5. a trace that ends with a step pending fails.
+    2. `adapter.step(ctx, step)` runs it, in the test process, under a
+       watchdog when ops are in flight;
+    3. what it returned is handled:
+       * `{:ok, result, ctx}`: its `outcome/1` must match the step's result
+         when the trace has one (`{:failed, msg}` always fails); it closes a
+         pending step;
+       * `{:skip, ctx}`: no outcome is asserted;
+       * `{:pending, ctx}` opens a pending step, the sequential form: a
+         second one, or a `{:skip, …}` while one is open, is refused;
+       * `{:start, op, call, ctx}` runs `call` in an op task, which stops at
+         `AshQuint.Gate` gates; `{:advance, op, ctx}` releases it to its
+         next gate; `{:complete, op, ctx}` releases it through every gate,
+         waits for its result and checks its `outcome/1` like `{:ok, …}`;
+       * the model and the adapter must agree: a step whose result is
+         `Pending` must return `:start`, `:advance` or `:pending`, and a
+         step with another result mustn't return `:start` or `:advance`;
+    4. the ops in flight settle: each reaches a gate or finishes (or counts
+       as blocked, with `may_block: true`), within `:settle_timeout`;
+    5. except after `{:pending, …}`, `project/1` must equal the expected
+       values on its keys, and every invariant must hold; all of a step's
+       failures are reported together;
+    6. a trace that ends with a step pending fails; one that ends with ops
+       in flight passes, and the ops are cancelled unchecked.
+
+  See the README's "Concurrent calls" for the op tasks, gates and
+  timeouts. A failure with ops in flight ends with an `in flight:` line and
+  lists them in its `:in_flight` field.
 
   Once `init/2` has returned, the replay ends with the adapter's
   `finish/2`, when it defines one, called exactly once with the latest `ctx`
   and the result: `:ok` after the last step's checks, `{:error, failure}` at
-  the first failing step. When an adapter callback raises (or throws or
+  the first failing step. Every op task has stopped by then, on every path.
+  When an adapter callback raises (or throws or
   exits), `finish/2` gets the `ctx` that callback was given and
   `{:error, failure}` describing the exception, and then the exception
   propagates. An `{:error, message}` from `finish/2` fails a passing replay at
@@ -33,11 +50,16 @@ defmodule AshQuint.Replay do
   `<model> <source> <name>, step <index> (<action>), seed <seed>: `.
   """
 
-  alias AshQuint.{Adapter, Step, Trace}
+  alias AshQuint.{Adapter, Gate, Step, Trace}
+  alias AshQuint.Replay.Ops
 
-  @interleaved "interleaved trace: calls overlap here. Replaying them needs concurrent " <>
-                 "replay (step/2 returning {:start, op, call, ctx} and {:complete, op, ctx}), " <>
-                 "which this version of ash_quint doesn't support yet"
+  # {:pending, ctx} is the sequential form: one at a time, and nothing but
+  # the {:ok, …} that completes it while it is open.
+  @use_start "use {:start, op, call, ctx} and {:complete, op, ctx} for calls that stay in flight"
+  @second_pending "interleaved trace: two {:pending, …} steps overlap; #{@use_start}"
+  @skip_pending "interleaved trace: {:skip, …} while a {:pending, …} step is open; #{@use_start}"
+  @ends_pending "interleaved trace: the trace ends with this {:pending, …} step open; " <>
+                  @use_start
 
   @type mutation :: nil | {:perturb, non_neg_integer(), term()} | {:drop, non_neg_integer()}
 
@@ -50,23 +72,41 @@ defmodule AshQuint.Replay do
           | {:op_field, String.t()}
           | {:init_action, String.t()}
           | {:mutate, mutation()}
+          | {:settle_timeout, non_neg_integer()}
+          | {:step_timeout, non_neg_integer()}
+          | {:complete_timeout, non_neg_integer()}
+          | {:gate_timeout, non_neg_integer()}
 
   @type synced :: %{
           index: pos_integer(),
           action: String.t(),
-          kind: :ok | :skip,
+          kind: :ok | :skip | :start | :advance | :complete,
+          op: String.t() | nil,
           expected: map()
         }
 
   @type report :: %{synced: [synced()], initial_expected: map()}
 
-  @type failure :: %{index: non_neg_integer(), action: String.t(), message: String.t()}
+  @type in_flight :: %{
+          op: String.t(),
+          started_at: pos_integer(),
+          at_gate: AshQuint.Gate.name() | nil
+        }
+
+  @type failure :: %{
+          required(:index) => non_neg_integer(),
+          required(:action) => String.t(),
+          required(:message) => String.t(),
+          optional(:in_flight) => [in_flight()]
+        }
 
   @doc """
   Replays `trace` through `adapter`.
 
   Returns `{:ok, report}`, where `report.synced` lists the steps that
-  returned `:ok` or `:skip` with their expected values, and
+  synced (every step but `{:pending, …}` ones) with their kind (`:ok`,
+  `:skip`, `:start`, `:advance` or `:complete`), op (`nil` for `:ok` and
+  `:skip`) and expected values, and
   `report.initial_expected` is the expected value of the initial state right
   after `init/2`; both keep only the projected keys. Returns
   `{:error, failure}` at the first failing step, or at the last step when
@@ -96,6 +136,15 @@ defmodule AshQuint.Replay do
       replaces the expected value of `key` at step `index` with
       `{:ash_quint_mutated, key}`; `{:drop, index}` replays step `index` as
       `{:skip, ctx}` without calling `step/2`, closing any pending step. Default `nil`.
+    * `:settle_timeout` — how long an op in flight may take to reach a gate
+      or finish after a step (ms). Default `500`.
+    * `:step_timeout` — how long a `step/2` call may take while ops are in
+      flight before the watchdog frees the gated ops and fails the step
+      (ms). Default `2_000`.
+    * `:complete_timeout` — how long a completed op may take to return
+      (ms). Default `5_000`.
+    * `:gate_timeout` — how long an op is held at a gate before the gate
+      returns anyway and the replay fails (ms). Default `5_000`.
   """
   @spec run(module(), Trace.t(), [option()]) :: {:ok, report()} | {:error, failure()}
   def run(adapter, %Trace{} = trace, opts \\ []) do
@@ -105,12 +154,24 @@ defmodule AshQuint.Replay do
       model: Keyword.get(opts, :model),
       step_opts: Keyword.take(opts, [:action_path, :result_path, :pending_result, :op_field]),
       init_action: Keyword.get(opts, :init_action, "Init"),
-      mutate: Keyword.get(opts, :mutate)
+      mutate: Keyword.get(opts, :mutate),
+      ref: make_ref(),
+      timeouts: %{
+        settle: Keyword.get(opts, :settle_timeout, 500),
+        step: Keyword.get(opts, :step_timeout, 2_000),
+        complete: Keyword.get(opts, :complete_timeout, 5_000),
+        gate: Keyword.get(opts, :gate_timeout, 5_000)
+      }
     }
 
-    with {:ok, ctx, step0} <- start(run, Keyword.get(opts, :adapter_opts, [])) do
-      {result, ctx, last} = replay_from(run, ctx, step0)
-      finish(run, ctx, last, result)
+    try do
+      with {:ok, ctx, step0} <- start(run, Keyword.get(opts, :adapter_opts, [])) do
+        {result, st} = replay_from(run, ctx, step0)
+        finish(run, st, result)
+      end
+    after
+      # Every path has cancelled already; this is for exceptions.
+      Gate.cancel_all(run.ref, %{})
     end
   end
 
@@ -142,18 +203,23 @@ defmodule AshQuint.Replay do
     end
   end
 
-  # Returns the result with the latest ctx and the last step (for a failure
-  # from finish/2 on a passing replay).
+  # Returns the result with the replay's state: the latest ctx and the last
+  # step (for a failure from finish/2 on a passing replay).
   defp replay_from(run, ctx, step0) do
-    with {:ok, initial_expected} <- initial_expected(run, ctx, step0),
-         {:ok, synced, ctx, last} <- replay(run, ctx, step0) do
-      {{:ok, %{synced: synced, initial_expected: initial_expected}}, ctx, last}
+    st = %{ctx: ctx, pending: nil, ops: %{}, synced: [], last: step0}
+
+    with {:ok, initial_expected} <- initial_expected(run, st, step0),
+         {:ok, st} <- replay(run, st) do
+      {{:ok, %{synced: Enum.reverse(st.synced), initial_expected: initial_expected}}, st}
     else
-      {:error, failure, ctx} -> {{:error, failure}, ctx, nil}
+      {:error, failure, st} -> {{:error, failure}, st}
     end
   end
 
-  defp finish(run, ctx, last, result) do
+  # Every op task is dead before finish/2 runs.
+  defp finish(run, %{ctx: ctx, last: last} = st, result) do
+    Gate.cancel_all(run.ref, st.ops)
+
     case {result, Adapter.finish(run.adapter, ctx, finished(result))} do
       {{:error, _failure}, _ignored} ->
         result
@@ -174,11 +240,11 @@ defmodule AshQuint.Replay do
   defp finished({:ok, _report}), do: :ok
   defp finished({:error, _failure} = error), do: error
 
-  defp initial_expected(run, ctx, step0) do
+  defp initial_expected(run, %{ctx: ctx} = st, step0) do
     with {:ok, projected} <-
-           initial(run, ctx, step0, "project/1", fn -> run.adapter.project(ctx) end),
+           initial(run, st, step0, "project/1", fn -> run.adapter.project(ctx) end),
          {:ok, expected} <-
-           initial(run, ctx, step0, "expected/2", fn ->
+           initial(run, st, step0, "expected/2", fn ->
              Adapter.expected(run.adapter, ctx, step0, projected)
            end) do
       {:ok, Map.take(expected, Map.keys(projected))}
@@ -188,89 +254,343 @@ defmodule AshQuint.Replay do
   # The initial state's project/1 and expected/2 calls have no step/2 call
   # around them, so an exception there is reported at step 0 instead of
   # propagating without the trace and seed.
-  defp initial(run, ctx, step0, callback, fun) do
-    guard(run, ctx, step0, callback, fn ->
+  defp initial(run, st, step0, callback, fun) do
+    guard(run, st.ctx, step0, callback, fn ->
       try do
         {:ok, fun.()}
       rescue
-        error -> halt_error(run, step0, ctx, [raised(callback, :error, error, __STACKTRACE__)])
+        error -> halt_error(run, step0, st, [raised(callback, :error, error, __STACKTRACE__)])
       end
     end)
   end
 
-  defp replay(run, ctx, step0) do
+  defp replay(run, st) do
     run.trace.states
     |> Enum.with_index()
     |> Enum.drop(1)
-    |> Enum.reduce_while({:ok, ctx, nil, [], step0}, fn {state, index},
-                                                        {:ok, ctx, pending, synced, _last} ->
+    |> Enum.reduce_while({:ok, st}, fn {state, index}, {:ok, st} ->
       case Step.from_state(state, index, run.step_opts) do
-        {:ok, step} -> step(run, step, ctx, pending, synced)
-        {:error, reason} -> halt(run, index, "?", ctx, [reason])
+        {:ok, step} -> step(run, step, st)
+        {:error, reason} -> halt(run, index, "?", st, [reason])
       end
     end)
     |> case do
-      {:ok, ctx, nil, synced, last} -> {:ok, Enum.reverse(synced), ctx, last}
-      {:ok, ctx, %Step{} = open, _synced, _last} -> halt_error(run, open, ctx, [@interleaved])
-      {:error, _failure, _ctx} = error -> error
+      {:ok, %{pending: nil} = st} -> {:ok, st}
+      {:ok, %{pending: %Step{} = open} = st} -> halt_error(run, open, st, [@ends_pending])
+      {:error, _failure, _st} = error -> error
     end
   end
 
-  defp step(run, step, ctx, pending, synced) do
-    case guard(run, ctx, step, "step/2", fn -> call(run, step, ctx) end) do
+  defp step(run, step, st) do
+    # A call that blocks on what a gated op holds is caught by a watchdog.
+    called =
+      guard(run, st.ctx, step, "step/2", fn ->
+        watchdog = Ops.watch(st.ops, run.timeouts)
+
+        try do
+          call(run, step, st.ctx)
+        catch
+          kind, reason ->
+            Ops.unwatch(watchdog)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        else
+          called -> {called, Ops.unwatch(watchdog)}
+        end
+      end)
+
+    case called do
+      {called, :ok} ->
+        called(run, step, st, called)
+
+      {called, {:fired, held}} ->
+        {ops, lines} = Ops.fired(run.ref, run.timeouts, st.ops, step, held)
+        halt(run, step, %{st | ctx: returned_ctx(called, st.ctx), ops: ops}, lines)
+    end
+  end
+
+  defp returned_ctx({:returned, returned}, ctx) when is_tuple(returned) do
+    case returned do
+      {:ok, _result, ctx} -> ctx
+      {tag, ctx} when tag in [:pending, :skip] -> ctx
+      {:start, _op, _call, ctx} -> ctx
+      {:start, _op, _call, ctx, _opts} -> ctx
+      {:advance, _op, ctx} -> ctx
+      {:advance, _op, ctx, _opts} -> ctx
+      {:complete, _op, ctx} -> ctx
+      _other -> ctx
+    end
+  end
+
+  defp returned_ctx(_called, ctx), do: ctx
+
+  defp called(run, step, st, called) do
+    case called do
       :no_clause ->
-        halt(run, step, ctx, [
+        halt(run, step, st, [
           "adapter #{inspect(run.adapter)} has no step/2 clause for `#{step.action_taken}`"
         ])
 
       :dropped ->
-        sync(run, step, :skip, [], ctx, synced)
+        sync(run, step, :skip, [], %{st | pending: nil})
 
       {:returned, returned} ->
-        handle(run, step, ctx, returned, pending, synced)
+        handle(run, step, st, returned)
     end
   end
 
-  defp handle(run, step, ctx_in, returned, pending, synced) do
+  defp handle(run, step, st, returned) do
     case returned do
-      {:pending, ctx} when pending != nil ->
-        halt(run, step, ctx, [@interleaved])
+      {:pending, ctx} when st.pending != nil ->
+        halt(run, step, %{st | ctx: ctx}, [@second_pending])
 
       {:pending, ctx} ->
-        {:cont, {:ok, ctx, step, synced, step}}
+        {:cont, {:ok, %{st | ctx: ctx, pending: step, last: step}}}
 
-      {:skip, ctx} when pending != nil ->
-        halt(run, step, ctx, [@interleaved])
+      {:skip, ctx} when st.pending != nil ->
+        halt(run, step, %{st | ctx: ctx}, [@skip_pending])
 
       {:ok, _result, ctx} when step.result == :pending ->
-        halt(run, step, ctx, [in_flight(run, step, "{:ok, …}")])
+        halt(run, step, %{st | ctx: ctx}, [in_flight(run, step, "{:ok, …}")])
 
       {:skip, ctx} when step.result == :pending ->
-        halt(run, step, ctx, [in_flight(run, step, "{:skip, …}")])
+        halt(run, step, %{st | ctx: ctx}, [in_flight(run, step, "{:skip, …}")])
 
       {:skip, ctx} ->
-        sync(run, step, :skip, [], ctx, synced)
+        sync_step(run, step, :skip, [], %{st | ctx: ctx})
 
       {:ok, result, ctx} ->
         errors =
           guard(run, ctx, step, "outcome/1", fn -> outcome_errors(run.adapter, step, result) end)
 
-        sync(run, step, :ok, errors, ctx, synced)
+        sync_step(run, step, :ok, errors, %{st | ctx: ctx, pending: nil})
 
-      other ->
-        halt(run, step, ctx_in, [
-          "step/2 returned #{inspect(other)}; " <>
-            "expected {:ok, result, ctx}, {:pending, ctx} or {:skip, ctx}"
+      returned ->
+        handle_op(run, step, st, returned)
+    end
+  end
+
+  # The returns that start, advance or complete an op.
+  defp handle_op(run, step, st, returned) do
+    case op_return(returned) do
+      {:start, op, call, ctx, opts} ->
+        start_op(run, step, %{st | ctx: ctx}, op, call, opts)
+
+      {:advance, op, ctx, opts} ->
+        advance_op(run, step, %{st | ctx: ctx}, op, opts)
+
+      {:complete, op, ctx} ->
+        complete_op(run, step, %{st | ctx: ctx}, op)
+
+      :error ->
+        halt(run, step, st, [
+          "step/2 returned #{inspect(returned)}; " <>
+            "expected {:ok, result, ctx}, {:pending, ctx}, {:skip, ctx}, " <>
+            "{:start, op, call, ctx}, {:advance, op, ctx} or {:complete, op, ctx}"
         ])
     end
   end
 
+  defp op_return({:start, op, call, ctx}), do: op_return({:start, op, call, ctx, []})
+
+  defp op_return({:start, op, call, _ctx, opts} = start)
+       when is_binary(op) and is_function(call, 0) and is_list(opts),
+       do: start
+
+  defp op_return({:advance, op, ctx}), do: op_return({:advance, op, ctx, []})
+
+  defp op_return({:advance, op, _ctx, opts} = advance) when is_binary(op) and is_list(opts),
+    do: advance
+
+  defp op_return({:complete, op, _ctx} = complete) when is_binary(op), do: complete
+  defp op_return(_returned), do: :error
+
+  # A step that made no op call still handles what the ops did meanwhile
+  # (a gate timeout, a raise).
+  defp sync_step(run, step, kind, errors, %{ops: ops} = st) when ops == %{},
+    do: sync(run, step, kind, errors, st)
+
+  defp sync_step(run, step, kind, errors, st) do
+    {ops, lines} = Ops.settle(run.ref, run.timeouts, st.ops, step)
+    settled(run, step, kind, errors, %{st | ops: ops}, nil, lines)
+  end
+
+  defp start_op(run, step, st, op, call, opts) do
+    cond do
+      step.result not in [:pending, nil] ->
+        halt(run, step, st, [completes_here(step, "{:start, #{inspect(op)}, …}")])
+
+      Map.has_key?(st.ops, op) ->
+        halt(run, step, st, [
+          "op #{inspect(op)} was started at step #{st.ops[op].started_at} and is started again"
+        ])
+
+      not valid_opts?(opts, [:early, :may_block, :at]) ->
+        halt(run, step, st, [
+          "step/2 returned {:start, #{inspect(op)}, …} with options #{inspect(opts)}; " <>
+            "expected early: :ok, may_block: boolean() and at: a gate name"
+        ])
+
+      true ->
+        {ops, lines} = Ops.start(run.ref, run.timeouts, st.ops, step, op, call, opts)
+        lines = lines ++ early(run, step, op, ops[op], opts) ++ at(op, ops[op], opts)
+        settled(run, step, :start, [], %{st | ops: ops}, op, lines)
+    end
+  end
+
+  defp advance_op(run, step, st, op, opts) do
+    cond do
+      step.result not in [:pending, nil] ->
+        halt(run, step, st, [completes_here(step, "{:advance, #{inspect(op)}, …}")])
+
+      not Map.has_key?(st.ops, op) ->
+        halt(run, step, st, [not_in_flight("advance", op, st.ops)])
+
+      not valid_opts?(opts, [:may_block, :at]) ->
+        halt(run, step, st, [
+          "step/2 returned {:advance, #{inspect(op)}, …} with options #{inspect(opts)}; " <>
+            "expected may_block: boolean() and at: a gate name"
+        ])
+
+      true ->
+        before = st.ops[op]
+        {ops, lines} = Ops.advance(run.ref, run.timeouts, st.ops, step, op, opts)
+
+        early =
+          if match?({:finished, _}, before.status),
+            do: [],
+            else: early(run, step, op, ops[op], before.opts)
+
+        lines = lines ++ early ++ at(op, ops[op], opts)
+        settled(run, step, :advance, [], %{st | ops: ops}, op, lines)
+    end
+  end
+
+  defp valid_opts?(opts, keys) do
+    Enum.all?(opts, fn
+      {:early, :ok} -> :early in keys
+      {:may_block, may_block} when is_boolean(may_block) -> :may_block in keys
+      {:at, name} when is_atom(name) or is_tuple(name) -> :at in keys
+      _other -> false
+    end)
+  end
+
+  # With `at: name`, the op must be held at that gate.
+  defp at(op, %{status: {:gate, name, _pid, _reply}}, opts) do
+    case Keyword.fetch(opts, :at) do
+      {:ok, ^name} ->
+        []
+
+      {:ok, expected} ->
+        [
+          "op #{inspect(op)} reached gate #{inspect(name)}; " <>
+            "the adapter expected #{inspect(expected)}"
+        ]
+
+      :error ->
+        []
+    end
+  end
+
+  defp at(_op, _entry, _opts), do: []
+
+  # Syncs a step whose ops have settled. Problems with the ops (`op_lines`)
+  # halt before projecting: an op may still be between gates.
+  defp settled(run, step, kind, errors, st, op, op_lines) do
+    if op_lines == [],
+      do: sync(run, step, kind, errors, st, op),
+      else: halt(run, step, st, errors ++ op_lines)
+  end
+
+  defp complete_op(run, step, st, op) do
+    cond do
+      step.result == :pending ->
+        halt(run, step, st, [in_flight(run, step, "{:complete, #{inspect(op)}, …}")])
+
+      not Map.has_key?(st.ops, op) ->
+        halt(run, step, st, [not_in_flight("complete", op, st.ops)])
+
+      true ->
+        complete_in_flight(run, step, st, op)
+    end
+  end
+
+  defp complete_in_flight(run, step, st, op) do
+    entry = st.ops[op]
+    {ops, result, lines} = Ops.complete(run.ref, run.timeouts, st.ops, step, op)
+    st = %{st | ops: ops}
+    errors = op_outcome_errors(run, step, st, op, entry, result)
+    settled(run, step, :complete, errors, st, op, lines)
+  end
+
+  # nil: the op didn't return in time, which Ops.complete/5 reports.
+  defp op_outcome_errors(_run, _step, _st, _op, _entry, nil), do: []
+
+  defp op_outcome_errors(_run, _step, _st, op, _entry, {:raised, _, _, _} = result),
+    do: [Ops.raised_line(op, result)]
+
+  defp op_outcome_errors(run, step, st, op, entry, {:returned, value}) do
+    prefix = "op #{inspect(op)} (started at step #{entry.started_at}): "
+
+    guard(run, st.ctx, step, "outcome/1", fn ->
+      Enum.map(outcome_errors(run.adapter, step, value), &(prefix <> &1))
+    end)
+  end
+
+  # The model and the adapter must agree on which steps keep a call in
+  # flight (§4.3 of the design): a Pending step starts or advances an op, a
+  # step with another result doesn't. Without a result, anything goes.
   defp in_flight(run, step, returned) do
     pending = Keyword.get(run.step_opts, :pending_result, "Pending")
 
     "the model keeps #{step.action_taken} in flight (lastResult #{pending}), " <>
-      "but step/2 returned #{returned}; return {:pending, ctx} when a later step " <>
-      "completes the call (concurrent replay with {:start, …} isn't supported yet)"
+      "but step/2 returned #{returned}"
+  end
+
+  # An op that returns at its start step, before any gate, didn't overlap
+  # anything: fail unless the adapter allows it (`early: :ok`). An op that
+  # raised is reported as such.
+  defp early(run, step, op, %{status: {:finished, {:returned, _value}}}, opts) do
+    if Keyword.get(opts, :early) == :ok do
+      []
+    else
+      until =
+        case completion(run, step, op) do
+          nil -> "a later step"
+          index -> "step #{index}"
+        end
+
+      [
+        "op #{inspect(op)} finished before reaching a gate; " <>
+          "the model keeps it in flight until #{until}"
+      ]
+    end
+  end
+
+  defp early(_run, _step, _op, _entry, _opts), do: []
+
+  # The index of the first later step with `op` that isn't Pending.
+  defp completion(run, step, op) do
+    run.trace.states
+    |> Enum.with_index()
+    |> Enum.drop(step.index + 1)
+    |> Enum.find_value(fn {state, index} ->
+      case Step.from_state(state, index, run.step_opts) do
+        {:ok, %Step{op: ^op, result: result}} when result != :pending -> index
+        _other -> nil
+      end
+    end)
+  end
+
+  defp completes_here(step, returned),
+    do: "the model completes #{step.action_taken} here, but step/2 returned #{returned}"
+
+  defp not_in_flight(verb, op, ops) do
+    in_flight =
+      if ops == %{},
+        do: "no op is in flight",
+        else: "in flight: " <> Enum.map_join(Enum.sort(Map.keys(ops)), ", ", &inspect/1)
+
+    "#{verb} of op #{inspect(op)}, which isn't in flight; " <> in_flight
   end
 
   # A dropped call also closes the pending step it would have completed, so
@@ -301,7 +621,8 @@ defmodule AshQuint.Replay do
     end
   end
 
-  defp sync(run, step, kind, errors, ctx, synced) do
+  defp sync(run, step, kind, errors, st, op \\ nil) do
+    ctx = st.ctx
     projected = guard(run, ctx, step, "project/1", fn -> run.adapter.project(ctx) end)
 
     expected =
@@ -319,10 +640,18 @@ defmodule AshQuint.Replay do
     if errors == [] do
       # Only the projected keys were compared, so only they are reported.
       expected = Map.take(expected, Map.keys(projected))
-      entry = %{index: step.index, action: step.action_taken, kind: kind, expected: expected}
-      {:cont, {:ok, ctx, nil, [entry | synced], step}}
+
+      entry = %{
+        index: step.index,
+        action: step.action_taken,
+        kind: kind,
+        op: op,
+        expected: expected
+      }
+
+      {:cont, {:ok, %{st | synced: [entry | st.synced], last: step}}}
     else
-      halt(run, step, ctx, errors)
+      halt(run, step, st, errors)
     end
   end
 
@@ -336,6 +665,7 @@ defmodule AshQuint.Replay do
     kind, reason ->
       stacktrace = __STACKTRACE__
       result = fail(run, step, [raised(callback, kind, reason, stacktrace)])
+      Gate.cancel_all(run.ref, %{})
 
       try do
         Adapter.finish(run.adapter, ctx, result)
@@ -389,17 +719,31 @@ defmodule AshQuint.Replay do
     error -> "invariant #{name} raised: #{Exception.message(error)}"
   end
 
-  defp halt(run, step, ctx, lines), do: {:halt, halt_error(run, step, ctx, lines)}
+  defp halt(run, step, st, lines), do: {:halt, halt_error(run, step, st, lines)}
 
-  defp halt(run, index, action, ctx, lines),
-    do: {:halt, halt_error(run, index, action, ctx, lines)}
+  defp halt(run, index, action, st, lines),
+    do: {:halt, halt_error(run, index, action, st, lines)}
 
-  defp halt_error(run, %Step{index: index, action_taken: action}, ctx, lines),
-    do: halt_error(run, index, action, ctx, lines)
+  defp halt_error(run, %Step{index: index, action_taken: action}, st, lines),
+    do: halt_error(run, index, action, st, lines)
 
-  defp halt_error(run, index, action, ctx, lines) do
-    {:error, failure} = fail(run, index, action, lines)
-    {:error, failure, ctx}
+  defp halt_error(run, index, action, st, lines) do
+    {:error, failure} = fail(run, index, action, lines ++ in_flight_lines(st.ops, lines))
+
+    failure =
+      if st.ops == %{}, do: failure, else: Map.put(failure, :in_flight, Ops.in_flight(st.ops))
+
+    {:error, failure, st}
+  end
+
+  # A failure with ops in flight ends with an `in flight:` line, unless a
+  # line already lists them.
+  defp in_flight_lines(ops, _lines) when ops == %{}, do: []
+
+  defp in_flight_lines(ops, lines) do
+    if Enum.any?(lines, &String.contains?(&1, "in flight: ")),
+      do: [],
+      else: [Ops.in_flight_line(ops)]
   end
 
   defp fail(run, %Step{index: index, action_taken: action}, lines),
