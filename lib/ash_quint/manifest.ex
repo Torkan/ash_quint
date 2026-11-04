@@ -13,7 +13,13 @@ defmodule AshQuint.Manifest do
             "name": "0",
             "outcomes": { "Inc": { "accepted": 1, "rejected:over_limit": 1 },
                           "Reset": { "accepted": 1 } },
-            "source": "random", "steps": 3 }
+            "source": "random", "steps": 3 },
+          { "actions": { "IncDone": 2, "IncStart": 2 }, "concurrent": true,
+            "file": "scenario_raceTest.itf.json", "max_in_flight": 2,
+            "name": "raceTest",
+            "outcomes": { "IncDone": { "accepted": 1, "rejected:over_limit": 1 },
+                          "IncStart": { "pending": 2 } },
+            "source": "scenario", "steps": 4 }
         ]
       }
 
@@ -21,8 +27,15 @@ defmodule AshQuint.Manifest do
   counts each action tag over the trace's steps; `outcomes` counts, per
   action, the steps' result labels (see `AshQuint.Step.result_label/1`).
   A step without a result (the model has no `lastResult`) is counted in
-  `actions` only, so a model without results has empty `outcomes`. The
-  encoding is deterministic: keys sorted at every level, traces sorted by
+  `actions` only, so a model without results has empty `outcomes`.
+
+  A trace is `concurrent` when a call is in flight in it: some step's
+  result is `Pending` (see `AshQuint.Step`). `max_in_flight` is the most
+  operations in flight at once. Both keys are written only for concurrent
+  traces and are optional on read, in either format version: absent means
+  `concurrent: false` and `max_in_flight: 0`.
+
+  The encoding is deterministic: keys sorted at every level, traces sorted by
   file name, no timestamps.
 
   ## Format versions
@@ -47,7 +60,9 @@ defmodule AshQuint.Manifest do
           name: String.t(),
           steps: non_neg_integer(),
           actions: %{String.t() => pos_integer()},
-          outcomes: outcomes() | nil
+          outcomes: outcomes() | nil,
+          concurrent: boolean(),
+          max_in_flight: non_neg_integer()
         }
 
   @type t :: %__MODULE__{
@@ -80,14 +95,16 @@ defmodule AshQuint.Manifest do
       manifest.traces
       |> Enum.sort_by(& &1.file)
       |> Enum.map(fn entry ->
-        ordered(%{
+        %{
           "actions" => ordered(entry.actions),
           "file" => entry.file,
           "name" => entry.name,
           "outcomes" => encode_outcomes(entry),
           "source" => Atom.to_string(entry.source),
           "steps" => entry.steps
-        })
+        }
+        |> Map.merge(concurrency(entry))
+        |> ordered()
       end)
 
     json =
@@ -109,6 +126,12 @@ defmodule AshQuint.Manifest do
   defp encode_outcomes(entry) do
     raise ArgumentError, "manifest entry #{entry.file} has no outcomes"
   end
+
+  # Written only when true, so sequential models' manifests don't change.
+  defp concurrency(%{concurrent: true, max_in_flight: max}),
+    do: %{"concurrent" => true, "max_in_flight" => max}
+
+  defp concurrency(_entry), do: %{}
 
   @doc """
   Reads the manifest at `path`. A missing file raises `File.Error`; an
@@ -187,6 +210,7 @@ defmodule AshQuint.Manifest do
       actions: actions,
       outcomes: outcomes!(json, version, file, index, path)
     }
+    |> Map.merge(concurrency!(json, file, path))
   end
 
   defp entry!({_entry, index}, _version, path) do
@@ -210,6 +234,23 @@ defmodule AshQuint.Manifest do
 
   defp outcomes!(_json, _version, _file, index, path) do
     fail!(path, "invalid manifest: traces[#{index}] is malformed")
+  end
+
+  defp concurrency!(json, file, path) do
+    case {Map.get(json, "concurrent", false), Map.get(json, "max_in_flight", 0)} do
+      {false, 0} ->
+        %{concurrent: false, max_in_flight: 0}
+
+      {true, max} when is_integer(max) and max > 0 ->
+        %{concurrent: true, max_in_flight: max}
+
+      _other ->
+        fail!(
+          path,
+          "invalid manifest: concurrent and max_in_flight of #{file} must be absent, " <>
+            "or true and a positive integer"
+        )
+    end
   end
 
   defp counts?(map),

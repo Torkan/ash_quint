@@ -225,6 +225,8 @@ defmodule AshQuint.Case do
       model: model,
       action_path: config.action_path,
       result_path: config.result_path,
+      pending_result: config.pending_result,
+      op_field: config.op_field,
       init_action: config.init_action,
       adapter_opts: setup.adapter_opts
     ]

@@ -11,8 +11,11 @@ defmodule Mix.Tasks.AshQuint.CoverageTest do
 
   setup %{tmp_dir: tmp_dir} do
     File.cp!("ash_quint.exs", Path.join(tmp_dir, "ash_quint.exs"))
-    File.mkdir_p!(Path.join(tmp_dir, @example))
-    File.cp_r!(@example, Path.join(tmp_dir, @example))
+    # The root config has both examples.
+    for example <- [@example, "priv/examples/race"] do
+      File.mkdir_p!(Path.join(tmp_dir, example))
+      File.cp_r!(example, Path.join(tmp_dir, example))
+    end
 
     Mix.shell(Mix.Shell.Process)
     on_exit(fn -> Mix.shell(Mix.Shell.IO) end)
@@ -30,14 +33,19 @@ defmodule Mix.Tasks.AshQuint.CoverageTest do
     end
   end
 
-  test "prints the counter example's table", %{root: root} do
+  test "prints the examples' tables", %{root: root} do
     assert coverage(root, []) == :ok
 
+    # Starts are counted as pending and completions by their outcome; the
+    # witness ends with both ops in flight, so there are two more starts.
     assert infos() == [
              "counter: 9 traces, 53 steps",
              "  Inc    23  accepted 20  rejected:over_limit 3",
              "  Peek   20  accepted 20",
-             "  Reset  10  accepted 10"
+             "  Reset  10  accepted 10",
+             "race: 6 traces, 22 steps",
+             "  IncDone   10  accepted 7  rejected:over_limit 3",
+             "  IncStart  12  pending 12"
            ]
   end
 

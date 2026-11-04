@@ -11,7 +11,16 @@ defmodule AshQuint.ManifestTest do
       "Action2" => %{"rejected:x" => 1, "accepted" => 1}
     }
 
-    %{file: file, source: source, name: name, steps: 3, actions: actions, outcomes: outcomes}
+    %{
+      file: file,
+      source: source,
+      name: name,
+      steps: 3,
+      actions: actions,
+      outcomes: outcomes,
+      concurrent: false,
+      max_in_flight: 0
+    }
   end
 
   defp manifest(traces, actions_order \\ :asc) do
@@ -81,6 +90,52 @@ defmodule AshQuint.ManifestTest do
     manifest = %{manifest(@entries) | traces: Enum.sort_by(manifest(@entries).traces, & &1.file)}
 
     assert Manifest.decode!(Manifest.encode(manifest), @path) == manifest
+  end
+
+  test "writes concurrent and max_in_flight only for concurrent traces" do
+    manifest = manifest(@entries)
+    [first | rest] = Enum.sort_by(manifest.traces, & &1.file)
+    concurrent = %{first | concurrent: true, max_in_flight: 2}
+    manifest = %{manifest | traces: [concurrent | rest]}
+    encoded = Manifest.encode(manifest)
+
+    assert encoded =~
+             ~r/"concurrent": true,\n      "file": "random_0.itf.json",\n      "max_in_flight": 2,\n/
+
+    assert length(Regex.scan(~r/"concurrent"/, encoded)) == 1
+    refute encoded =~ "max_in_flight\": 0"
+    assert Manifest.decode!(encoded, @path) == manifest
+  end
+
+  test "reads entries without the concurrency keys as sequential" do
+    assert %Manifest{traces: [entry]} = Manifest.decode!(json(%{}), @path)
+    assert %{concurrent: false, max_in_flight: 0} = entry
+  end
+
+  test "refuses malformed concurrency keys" do
+    trace = %{
+      "file" => "random_0.itf.json",
+      "source" => "random",
+      "name" => "0",
+      "steps" => 2,
+      "actions" => %{"Inc" => 1},
+      "outcomes" => %{"Inc" => %{"accepted" => 1}}
+    }
+
+    for keys <- [
+          %{"concurrent" => true},
+          %{"concurrent" => false, "max_in_flight" => 1},
+          %{"concurrent" => "yes", "max_in_flight" => 1},
+          %{"concurrent" => true, "max_in_flight" => 0},
+          %{"max_in_flight" => 2}
+        ] do
+      assert_raise ArgumentError,
+                   "#{@path}: invalid manifest: concurrent and max_in_flight of " <>
+                     "random_0.itf.json must be absent, or true and a positive integer",
+                   fn ->
+                     Manifest.decode!(json(%{"traces" => [Map.merge(trace, keys)]}), @path)
+                   end
+    end
   end
 
   @tag :tmp_dir

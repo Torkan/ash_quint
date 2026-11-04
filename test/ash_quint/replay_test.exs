@@ -7,7 +7,9 @@ defmodule AshQuint.ReplayTest do
   alias AshQuint.Test.{ToyAdapter, ToyAdapterMissingKey, ToyAdapterNoReset}
 
   @prefix "counter random t, step"
-  @interleaved "interleaved trace: concurrent replay is out of scope for ash_quint v1"
+  @interleaved "interleaved trace: calls overlap here. Replaying them needs concurrent " <>
+                 "replay (step/2 returning {:start, op, call, ctx} and {:complete, op, ctx}), " <>
+                 "which this version of ash_quint doesn't support yet"
 
   defmodule SkipAll do
     @moduledoc false
@@ -261,6 +263,41 @@ defmodule AshQuint.ReplayTest do
 
   test "trace ending pending is refused" do
     assert message([init(), begin(0, 1)]) == "#{@prefix} 1 (Begin), seed 7: #{@interleaved}"
+  end
+
+  describe "a step the model keeps in flight (Pending)" do
+    defp in_flight(tag, result \\ {:variant, "Pending", {}}) do
+      %{
+        "count" => 0,
+        "lastAction" => {:variant, tag, %{"by" => 1, "op" => "o1"}},
+        "lastResult" => result
+      }
+    end
+
+    test "refuses {:ok, …}" do
+      assert message([init(), in_flight("Inc")]) ==
+               "#{@prefix} 1 (Inc), seed 7: the model keeps Inc in flight (lastResult Pending), " <>
+                 "but step/2 returned {:ok, …}; return {:pending, ctx} when a later step " <>
+                 "completes the call (concurrent replay with {:start, …} isn't supported yet)"
+    end
+
+    test "refuses {:skip, …}" do
+      assert message([init(), in_flight("Peek")]) =~
+               "#{@prefix} 1 (Peek), seed 7: the model keeps Peek in flight (lastResult Pending), " <>
+                 "but step/2 returned {:skip, …}"
+    end
+
+    test "uses the pending_result option" do
+      states = [init(), in_flight("Inc", {:variant, "InFlight", {}})]
+
+      assert {:error, failure} =
+               Replay.run(ToyAdapter, trace(states), model: :counter, pending_result: "InFlight")
+
+      assert failure.message =~ "the model keeps Inc in flight (lastResult InFlight)"
+
+      assert {:error, failure} = Replay.run(ToyAdapter, trace(states), model: :counter)
+      assert failure.message =~ "result at lastResult must be Accepted, Rejected(str) or Pending"
+    end
   end
 
   test "skip compares state without an outcome" do

@@ -45,6 +45,11 @@ mix hex.build                              # no test/, config/, agent-plans/
 - `priv/examples/counter/` — the example model and its committed traces
   (configured in the root `ash_quint.exs`, which isn't packaged).
   Regenerate with `MIX_ENV=test mix ash_quint.gen counter`.
+- `priv/examples/race/` — the concurrency example (start/complete actions
+  over op ids, `Pending` results) and its committed traces, configured in
+  the root `ash_quint.exs` too. It has no adapter yet: concurrent replay
+  isn't implemented, and `race_example_test` checks that its traces are
+  refused. Regenerate with `MIX_ENV=test mix ash_quint.gen race`.
 - `test/support/counter_adapter.ex` — the reference adapter, linked from the
   README; `test/support/toy_adapter.ex` — an in-memory adapter with
   switchable faults for the Replay and Sensitivity tests.

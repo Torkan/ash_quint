@@ -19,6 +19,8 @@ defmodule AshQuint.Config do
             seed: 1,                                      # required
             action_path: ["lastAction"],
             result_path: ["lastResult"],
+            pending_result: "Pending",                    # see AshQuint.Step
+            op_field: "op",
             init_action: "Init",
             random: [main: "counter", n_traces: 20, max_steps: 12, max_samples: 200],
             # random and witnesses also take init: and step:, the model's
@@ -79,6 +81,8 @@ defmodule AshQuint.Config do
     seed: :integer,
     action_path: :strings,
     result_path: :strings,
+    pending_result: :pending_result,
+    op_field: :string,
     init_action: :string,
     random: :random,
     witnesses: :witnesses,
@@ -271,6 +275,11 @@ defmodule AshQuint.Config do
     unless strings?(value), do: type_error!(path, "a non-empty list of strings", value)
   end
 
+  defp check!(:pending_result, value, path, _root) when value in ["Accepted", "Rejected"],
+    do: fail!("#{join(path)} can't be #{value}, which is already a result")
+
+  defp check!(:pending_result, value, path, root), do: check!(:string, value, path, root)
+
   defp check!(:on_missing_model, value, _path, _root) when value in [:fail, :skip], do: :ok
 
   defp check!(:on_missing_model, value, path, _root),
@@ -345,6 +354,8 @@ defmodule AshQuint.Config.Model do
             seed: nil,
             action_path: ["lastAction"],
             result_path: ["lastResult"],
+            pending_result: "Pending",
+            op_field: "op",
             init_action: "Init",
             random: nil,
             witnesses: nil,
@@ -359,6 +370,8 @@ defmodule AshQuint.Config.Model do
           seed: integer(),
           action_path: [String.t()],
           result_path: [String.t()],
+          pending_result: String.t(),
+          op_field: String.t(),
           init_action: String.t(),
           random: keyword() | nil,
           witnesses: keyword() | nil,

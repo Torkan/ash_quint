@@ -43,7 +43,8 @@ defmodule AshQuint.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv/examples/counter mix.exs README.md LICENSE CHANGELOG.md)
+      files:
+        ~w(lib priv/examples/counter priv/examples/race mix.exs README.md LICENSE CHANGELOG.md)
     ]
   end
 

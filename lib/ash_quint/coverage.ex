@@ -5,8 +5,9 @@ defmodule AshQuint.Coverage do
   prints after writing.
 
   For each action taken in the traces, the coverage counts its steps and,
-  per result label (`AshQuint.Step.result_label/1`: `"accepted"` or
-  `"rejected:<code>"`), the steps with that result. A table of it:
+  per result label (`AshQuint.Step.result_label/1`: `"accepted"`,
+  `"rejected:<code>"` or `"pending"` for a step that keeps its call in
+  flight), the steps with that result. A table of it:
 
       counter: 9 traces, 53 steps
         Inc    23  accepted 20  rejected:over_limit 3

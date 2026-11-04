@@ -41,6 +41,7 @@ defmodule AshQuint.StepTest do
   test "result labels" do
     assert Step.result_label(:accepted) == "accepted"
     assert Step.result_label({:rejected, "over_limit"}) == "rejected:over_limit"
+    assert Step.result_label(:pending) == "pending"
     assert Step.result_label(nil) == nil
   end
 
@@ -74,6 +75,7 @@ defmodule AshQuint.StepTest do
              action_taken: "Inc",
              nondet_picks: %{"by" => 1},
              result: {:rejected, "nope"},
+             op: nil,
              state: %{"count" => 1}
            }
   end
@@ -95,11 +97,70 @@ defmodule AshQuint.StepTest do
   test "unexpected result shape" do
     assert Step.from_state(state({:variant, "Reset", {}}, {:variant, "Maybe", {}}), 1, []) ==
              {:error,
-              "result at lastResult must be Accepted or Rejected(str), got {:variant, \"Maybe\", {}}"}
+              "result at lastResult must be Accepted, Rejected(str) or Pending, " <>
+                "got {:variant, \"Maybe\", {}}"}
 
     assert Step.from_state(state({:variant, "Reset", {}}, {:variant, "Rejected", 1}), 1, []) ==
              {:error,
-              "result at lastResult must be Accepted or Rejected(str), got {:variant, \"Rejected\", 1}"}
+              "result at lastResult must be Accepted, Rejected(str) or Pending, " <>
+                "got {:variant, \"Rejected\", 1}"}
+  end
+
+  describe "operations" do
+    @pending {:variant, "Pending", {}}
+
+    test "Pending is a pending result, with the op from the picks" do
+      action = {:variant, "IncStart", %{"op" => "o1", "by" => 2}}
+
+      assert {:ok, %Step{result: :pending, op: "o1", nondet_picks: picks}} =
+               Step.from_state(state(action, @pending), 1, [])
+
+      assert picks == %{"op" => "o1", "by" => 2}
+    end
+
+    test "a completion has its outcome and its op" do
+      action = {:variant, "IncDone", %{"op" => "o1"}}
+
+      assert {:ok, %Step{result: {:rejected, "over_limit"}, op: "o1"}} =
+               Step.from_state(state(action, {:variant, "Rejected", "over_limit"}), 1, [])
+    end
+
+    test "no op field gives nil, and so does a field that isn't a string" do
+      assert {:ok, %Step{op: nil}} = Step.from_state(state({:variant, "Reset", {}}), 1, [])
+
+      assert {:ok, %Step{op: nil, nondet_picks: %{"op" => 1}}} =
+               Step.from_state(state({:variant, "Apply", %{"op" => 1}}), 1, [])
+    end
+
+    test "a pending step needs a string op" do
+      for picks <- [%{"by" => 2}, %{"op" => 1}] do
+        assert Step.from_state(state({:variant, "IncStart", picks}, @pending), 1, []) ==
+                 {:error,
+                  "the action at lastAction is pending but has no string op field \"op\": " <>
+                    inspect(picks)}
+      end
+
+      assert {:error, "the action at lastAction is pending" <> _} =
+               Step.from_state(state({:variant, "IncStart", "o1"}, @pending), 1, [])
+    end
+
+    test "a Pending variant with a value is an error" do
+      action = {:variant, "IncStart", %{"op" => "o1"}}
+
+      assert {:error, "result at lastResult must be Accepted, Rejected(str) or Pending, " <> _} =
+               Step.from_state(state(action, {:variant, "Pending", 1}), 1, [])
+    end
+
+    test "custom pending_result and op_field" do
+      action = {:variant, "IncStart", %{"id" => "o1", "op" => "inc"}}
+      opts = [pending_result: "InFlight", op_field: "id"]
+
+      assert {:ok, %Step{result: :pending, op: "o1"}} =
+               Step.from_state(state(action, {:variant, "InFlight", {}}), 1, opts)
+
+      assert {:error, "result at lastResult must be Accepted, Rejected(str) or InFlight, " <> _} =
+               Step.from_state(state(action, @pending), 1, opts)
+    end
   end
 
   test "builds steps from the real run fixture" do

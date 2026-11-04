@@ -2,6 +2,7 @@ defmodule AshQuint.GenTest do
   use ExUnit.Case, async: true
 
   alias AshQuint.Config
+  alias AshQuint.Config.Model
   alias AshQuint.Gen
   alias AshQuint.Manifest
   alias AshQuint.Trace
@@ -563,7 +564,9 @@ defmodule AshQuint.GenTest do
                outcomes: %{
                  "Inc" => %{"accepted" => 2, "rejected:over_limit" => 1},
                  "Reset" => %{"accepted" => 1}
-               }
+               },
+               concurrent: false,
+               max_in_flight: 0
              }
     end
 
@@ -661,7 +664,98 @@ defmodule AshQuint.GenTest do
     %{"lastAction" => {:variant, tag, %{}}, "lastResult" => result, "n" => 0}
   end
 
+  describe "entry/5 with ops in flight" do
+    @pending {:variant, "Pending", {}}
+    @accepted {:variant, "Accepted", {}}
+
+    defp op_state(tag, picks, result),
+      do: %{"lastAction" => {:variant, tag, picks}, "lastResult" => result}
+
+    defp start(op, result \\ @pending), do: op_state("IncStart", %{"op" => op}, result)
+    defp done(op), do: op_state("IncDone", %{"op" => op}, @accepted)
+
+    defp race_entry(states, model_opts \\ []) do
+      states = [op_state("Init", {}, @accepted) | states]
+      trace = %AshQuint.Trace{path: "t", vars: [], states: states}
+      fields = [name: :race, model: "m", tests: "t", out: "o", on_missing_model: :fail, seed: 1]
+      model = struct!(Model, fields ++ model_opts)
+      Gen.entry("random_0.itf.json", :random, "0", trace, model)
+    end
+
+    test "counts the ops in flight at once" do
+      entry = race_entry([start("o1"), start("o2"), done("o2"), start("o3"), done("o1")])
+
+      assert entry == %{
+               file: "random_0.itf.json",
+               source: :random,
+               name: "0",
+               steps: 5,
+               actions: %{"IncStart" => 3, "IncDone" => 2},
+               outcomes: %{"IncStart" => %{"pending" => 3}, "IncDone" => %{"accepted" => 2}},
+               concurrent: true,
+               max_in_flight: 2
+             }
+    end
+
+    test "one action that starts and completes counts pending and its outcomes" do
+      inc = fn op, result -> op_state("Inc", %{"op" => op}, result) end
+      rejected = {:variant, "Rejected", "over_limit"}
+
+      entry =
+        race_entry([
+          inc.("o1", @pending),
+          inc.("o2", @pending),
+          inc.("o2", @accepted),
+          inc.("o1", rejected),
+          inc.("o1", @accepted)
+        ])
+
+      assert entry.actions == %{"Inc" => 5}
+
+      assert entry.outcomes == %{
+               "Inc" => %{"pending" => 2, "accepted" => 2, "rejected:over_limit" => 1}
+             }
+
+      assert %{concurrent: true, max_in_flight: 2} = entry
+    end
+
+    test "one op at a time is concurrent with max_in_flight 1" do
+      entry = race_entry([start("o1"), done("o1"), start("o2"), done("o2")])
+      assert %{concurrent: true, max_in_flight: 1} = entry
+    end
+
+    test "an op advanced with Pending stays one op" do
+      assert %{max_in_flight: 1} = race_entry([start("o1"), start("o1"), done("o1")])
+    end
+
+    test "a trace without Pending isn't concurrent, even with op fields" do
+      entry = race_entry([start("o1", @accepted), done("o1")])
+      assert %{concurrent: false, max_in_flight: 0} = entry
+    end
+
+    test "reads the model's pending_result and op_field" do
+      in_flight = {:variant, "InFlight", {}}
+      states = [op_state("IncStart", %{"id" => "a"}, in_flight)]
+
+      assert %{max_in_flight: 1} =
+               race_entry(states, pending_result: "InFlight", op_field: "id")
+
+      assert_raise ArgumentError, ~r/random_0.itf.json, state 1: result at lastResult/, fn ->
+        race_entry(states)
+      end
+    end
+  end
+
   defp entry(file, source, name, steps, actions) do
-    %{file: file, source: source, name: name, steps: steps, actions: actions, outcomes: %{}}
+    %{
+      file: file,
+      source: source,
+      name: name,
+      steps: steps,
+      actions: actions,
+      outcomes: %{},
+      concurrent: false,
+      max_in_flight: 0
+    }
   end
 end

@@ -1,0 +1,130 @@
+{
+  "ash_quint": 2,
+  "models": {
+    "priv/examples/race/model-tests.qnt": "sha256:91d7eb8cab3c65c8b54ac279b8b411392e69c37c886b7c7d3be8439608c2296d",
+    "priv/examples/race/model.qnt": "sha256:b09ab33571ce6fb6ff53ebe79d2f486c41297796fb0fb96b27a7ab5d19d4f787"
+  },
+  "quint": "0.33.1",
+  "seed": 20261104,
+  "traces": [
+    {
+      "actions": {
+        "IncDone": 2,
+        "IncStart": 2
+      },
+      "concurrent": true,
+      "file": "random_0.itf.json",
+      "max_in_flight": 1,
+      "name": "0",
+      "outcomes": {
+        "IncDone": {
+          "accepted": 2
+        },
+        "IncStart": {
+          "pending": 2
+        }
+      },
+      "source": "random",
+      "steps": 4
+    },
+    {
+      "actions": {
+        "IncDone": 2,
+        "IncStart": 2
+      },
+      "concurrent": true,
+      "file": "random_1.itf.json",
+      "max_in_flight": 2,
+      "name": "1",
+      "outcomes": {
+        "IncDone": {
+          "accepted": 1,
+          "rejected:over_limit": 1
+        },
+        "IncStart": {
+          "pending": 2
+        }
+      },
+      "source": "random",
+      "steps": 4
+    },
+    {
+      "actions": {
+        "IncDone": 2,
+        "IncStart": 2
+      },
+      "concurrent": true,
+      "file": "random_2.itf.json",
+      "max_in_flight": 1,
+      "name": "2",
+      "outcomes": {
+        "IncDone": {
+          "accepted": 2
+        },
+        "IncStart": {
+          "pending": 2
+        }
+      },
+      "source": "random",
+      "steps": 4
+    },
+    {
+      "actions": {
+        "IncDone": 2,
+        "IncStart": 2
+      },
+      "concurrent": true,
+      "file": "random_3.itf.json",
+      "max_in_flight": 1,
+      "name": "3",
+      "outcomes": {
+        "IncDone": {
+          "accepted": 1,
+          "rejected:over_limit": 1
+        },
+        "IncStart": {
+          "pending": 2
+        }
+      },
+      "source": "random",
+      "steps": 4
+    },
+    {
+      "actions": {
+        "IncDone": 2,
+        "IncStart": 2
+      },
+      "concurrent": true,
+      "file": "scenario_raceTest.itf.json",
+      "max_in_flight": 2,
+      "name": "raceTest",
+      "outcomes": {
+        "IncDone": {
+          "accepted": 1,
+          "rejected:over_limit": 1
+        },
+        "IncStart": {
+          "pending": 2
+        }
+      },
+      "source": "scenario",
+      "steps": 4
+    },
+    {
+      "actions": {
+        "IncStart": 2
+      },
+      "concurrent": true,
+      "file": "witness_witOverlap.itf.json",
+      "max_in_flight": 2,
+      "name": "witOverlap",
+      "outcomes": {
+        "IncStart": {
+          "pending": 2
+        }
+      },
+      "source": "witness",
+      "steps": 2
+    }
+  ]
+}

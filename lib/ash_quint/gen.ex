@@ -288,14 +288,22 @@ defmodule AshQuint.Gen do
   The manifest entry for a generated trace: `steps` is the number of states
   after the initial one, `actions` counts their action tags, and `outcomes`
   counts, per action, their result labels (`AshQuint.Step.result_label/1`;
-  steps without a result aren't counted there). States are read with the
-  model's `action_path` and `result_path`. Raises `ArgumentError` when a
-  state's action or result can't be read.
+  steps without a result aren't counted there). An op is in flight from its
+  first `Pending` step until a step of the same op that isn't `Pending`;
+  `max_in_flight` is the most ops in flight at once, and `concurrent` is
+  whether there ever was one. States are read with the model's
+  `action_path`, `result_path`, `pending_result` and `op_field`. Raises
+  `ArgumentError` when a state's action or result can't be read.
   """
   @spec entry(String.t(), AshQuint.Trace.source(), String.t(), AshQuint.Trace.t(), Model.t()) ::
           Manifest.entry()
   def entry(file, source, name, trace, %Model{} = model) do
-    opts = [action_path: model.action_path, result_path: model.result_path]
+    opts = [
+      action_path: model.action_path,
+      result_path: model.result_path,
+      pending_result: model.pending_result,
+      op_field: model.op_field
+    ]
 
     steps =
       trace.states
@@ -303,27 +311,43 @@ defmodule AshQuint.Gen do
       |> Enum.drop(1)
       |> Enum.map(fn {state, index} ->
         case Step.from_state(state, index, opts) do
-          {:ok, step} -> {step.action_taken, Step.result_label(step.result)}
+          {:ok, step} -> step
           {:error, reason} -> raise ArgumentError, "#{file}, state #{index}: #{reason}"
         end
       end)
 
-    actions = steps |> Enum.map(&elem(&1, 0)) |> Enum.frequencies()
-
     outcomes =
       steps
-      |> Enum.reject(fn {_action, label} -> is_nil(label) end)
-      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Enum.reject(&is_nil(&1.result))
+      |> Enum.group_by(& &1.action_taken, &Step.result_label(&1.result))
       |> Map.new(fn {action, labels} -> {action, Enum.frequencies(labels)} end)
+
+    max_in_flight = max_in_flight(steps)
 
     %{
       file: file,
       source: source,
       name: name,
       steps: length(trace.states) - 1,
-      actions: actions,
-      outcomes: outcomes
+      actions: steps |> Enum.map(& &1.action_taken) |> Enum.frequencies(),
+      outcomes: outcomes,
+      concurrent: max_in_flight > 0,
+      max_in_flight: max_in_flight
     }
+  end
+
+  defp max_in_flight(steps) do
+    {_in_flight, max} =
+      Enum.reduce(steps, {MapSet.new(), 0}, fn
+        %Step{result: :pending, op: op}, {in_flight, max} ->
+          in_flight = MapSet.put(in_flight, op)
+          {in_flight, max(max, MapSet.size(in_flight))}
+
+        %Step{op: op}, {in_flight, max} ->
+          {MapSet.delete(in_flight, op), max}
+      end)
+
+    max
   end
 
   @doc """

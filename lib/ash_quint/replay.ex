@@ -13,7 +13,8 @@ defmodule AshQuint.Replay do
        `{:ok, result, ctx}` closes it, and its `outcome/1` must match the
        step's result when the trace has one (`{:failed, msg}` always fails);
        `{:skip, ctx}` asserts no outcome and is refused while a step is
-       pending;
+       pending; at a step whose result is `Pending` (the model keeps the
+       call in flight), `{:ok, …}` and `{:skip, …}` are refused;
     4. after `:ok` or `:skip`, `project/1` must equal the expected values on
        its keys, and every invariant must hold; all of a step's failures are
        reported together;
@@ -34,7 +35,9 @@ defmodule AshQuint.Replay do
 
   alias AshQuint.{Adapter, Step, Trace}
 
-  @interleaved "interleaved trace: concurrent replay is out of scope for ash_quint v1"
+  @interleaved "interleaved trace: calls overlap here. Replaying them needs concurrent " <>
+                 "replay (step/2 returning {:start, op, call, ctx} and {:complete, op, ctx}), " <>
+                 "which this version of ash_quint doesn't support yet"
 
   @type mutation :: nil | {:perturb, non_neg_integer(), term()} | {:drop, non_neg_integer()}
 
@@ -43,6 +46,8 @@ defmodule AshQuint.Replay do
           | {:adapter_opts, keyword()}
           | {:action_path, [String.t(), ...]}
           | {:result_path, [String.t(), ...]}
+          | {:pending_result, String.t()}
+          | {:op_field, String.t()}
           | {:init_action, String.t()}
           | {:mutate, mutation()}
 
@@ -83,6 +88,9 @@ defmodule AshQuint.Replay do
     * `:adapter_opts` — passed to `init/2`. Default `[]`.
     * `:action_path`, `:result_path` — where the action and result are.
       Default `["lastAction"]` and `["lastResult"]`.
+    * `:pending_result`, `:op_field` — the result variant of a step that
+      keeps its call in flight, and the action's operation id field (see
+      `AshQuint.Step`). Default `"Pending"` and `"op"`.
     * `:init_action` — the initial state's action. Default `"Init"`.
     * `:mutate` — for the sensitivity check: `{:perturb, index, key}`
       replaces the expected value of `key` at step `index` with
@@ -95,7 +103,7 @@ defmodule AshQuint.Replay do
       adapter: adapter,
       trace: trace,
       model: Keyword.get(opts, :model),
-      step_opts: Keyword.take(opts, [:action_path, :result_path]),
+      step_opts: Keyword.take(opts, [:action_path, :result_path, :pending_result, :op_field]),
       init_action: Keyword.get(opts, :init_action, "Init"),
       mutate: Keyword.get(opts, :mutate)
     }
@@ -234,6 +242,12 @@ defmodule AshQuint.Replay do
       {:skip, ctx} when pending != nil ->
         halt(run, step, ctx, [@interleaved])
 
+      {:ok, _result, ctx} when step.result == :pending ->
+        halt(run, step, ctx, [in_flight(run, step, "{:ok, …}")])
+
+      {:skip, ctx} when step.result == :pending ->
+        halt(run, step, ctx, [in_flight(run, step, "{:skip, …}")])
+
       {:skip, ctx} ->
         sync(run, step, :skip, [], ctx, synced)
 
@@ -249,6 +263,14 @@ defmodule AshQuint.Replay do
             "expected {:ok, result, ctx}, {:pending, ctx} or {:skip, ctx}"
         ])
     end
+  end
+
+  defp in_flight(run, step, returned) do
+    pending = Keyword.get(run.step_opts, :pending_result, "Pending")
+
+    "the model keeps #{step.action_taken} in flight (lastResult #{pending}), " <>
+      "but step/2 returned #{returned}; return {:pending, ctx} when a later step " <>
+      "completes the call (concurrent replay with {:start, …} isn't supported yet)"
   end
 
   # A dropped call also closes the pending step it would have completed, so

@@ -74,7 +74,8 @@ var lastResult: Result   // optional; when present, outcomes are asserted
   record (`Act({ m: m })`) to keep it whole.
 - **`lastResult`**, when the model has it, is `Accepted` or
   `Rejected(code)`. The replay asserts that the system's outcome matches.
-  Without it, outcomes aren't asserted.
+  Without it, outcomes aren't asserted. A third variant, `Pending`, marks a
+  call still in flight (see [Concurrency](#concurrency) below).
 - **`init`** sets `lastAction` to `Init`. The initial state isn't replayed;
   the adapter's `init/2` sets up the system instead. Then `project/1` and
   `expected/2` are called once on the initial state (step 0, action `Init`)
@@ -108,6 +109,49 @@ Witnesses are boolean `val`s that become true in a state worth reaching
 and
 [`model-tests.qnt`](https://github.com/Torkan/ash_quint/blob/main/priv/examples/counter/model-tests.qnt).
 
+### Concurrency
+
+A model can let calls overlap: two requests racing on one row, a retry
+overlapping a commit. It still takes one action per step, and spells the
+overlap out as separate **start** and **completion** actions over an
+**operation id**:
+
+```quint
+type Action = Init | IncStart({ op: str, by: int }) | IncDone({ op: str })
+type Result = Accepted | Rejected(str) | Pending
+```
+
+- **Operation ids.** Every action that starts, advances or completes an
+  in-flight call has an `op` field in its record value
+  (`IncStart({ op: "o1", by: 2 })`, `IncDone({ op: "o1" })`). The model
+  holds a small set of ids (`Set("o1", "o2")`). The step's `op` is the id
+  (a string); it stays in `nondet_picks` too.
+- **`Pending`.** A step that starts or advances a call sets
+  `lastResult' = Pending`: the call stays in flight, and no outcome is
+  asserted there. A `Pending` step must have an `op`.
+- **The completing step's `lastResult`** is the outcome of the call it
+  completes. One call completes per step, so one `lastResult` is enough.
+- **In-flight bookkeeping is ordinary model state** (`inflight: str -> int`).
+  The adapter doesn't project it.
+- **Model what the system visibly shows.** Concurrent replay will compare
+  every step's state, starts included, while calls are in flight, so
+  uncommitted writes don't belong in projected variables.
+- **Interleaving points are a model choice.** `IncStart` and `IncDone` give
+  "requested" and "returned"; split the action further (`IncRead`) for more.
+
+The field and variant names are configurable (`op_field`, `pending_result`).
+The manifest marks each trace with a call in flight as `"concurrent": true`,
+with the most calls in flight at once as `"max_in_flight"`. See the
+[`race`](https://github.com/Torkan/ash_quint/blob/main/priv/examples/race/model.qnt)
+example: two `Inc`s against a limit, and a scenario where both start before
+either returns.
+
+Replaying overlapping calls needs concurrent replay, which isn't there yet:
+an adapter can return `{:pending, ctx}` for one start at a time, and a trace
+in which calls overlap fails as an interleaved trace (see
+[Limitations](#limitations)). A `Pending` step whose `step/2` returns
+`{:ok, …}` or `{:skip, …}` fails too.
+
 ## Configuration: `ash_quint.exs`
 
 `ash_quint.exs`, at the project root, evaluates to a keyword list. Every
@@ -135,6 +179,8 @@ key, with its default:
       seed: 20_261_102,                             # required
       action_path: ["lastAction"],
       result_path: ["lastResult"],
+      pending_result: "Pending",                    # see "Concurrency"
+      op_field: "op",
       init_action: "Init",
       # At least one of random, witnesses and scenarios.
       random: [
@@ -230,7 +276,19 @@ counter: 9 traces, 53 steps
 Each row is an action the traces take, with its step count and then each
 result it reaches with its count. A result is labelled `accepted` for
 `Accepted` and `rejected:<code>` for `Rejected(code)`, so
-`Rejected("over_limit")` is `rejected:over_limit`. A label missing from a
+`Rejected("over_limit")` is `rejected:over_limit`. A step that keeps its
+call in flight (see [Concurrency](#concurrency)) is labelled `pending`, and
+the step that completes the call counts under its own outcome. For the race
+example, where `IncStart` starts and `IncDone` completes:
+
+```text
+race: 6 traces, 22 steps
+  IncDone   10  accepted 7  rejected:over_limit 3
+  IncStart  12  pending 12
+```
+
+There are more starts than completions because the `witOverlap` witness
+ends with both calls in flight. A label missing from a
 row is an outcome no trace reaches, for example a rejection the random
 runs never hit: add a witness or a scenario for it. Actions the traces
 never take aren't listed (the manifest doesn't know the model's actions),
@@ -408,7 +466,8 @@ counter random 3, step 4 (Inc), seed 20261102: outcome: expected :accepted, got 
 The problems are an outcome mismatch, a failed system call
 (`{:failed, message}`), a missing `step/2` clause, a bad return value, a
 projected key that differs from the model (or has no expected value), a
-failing invariant, an interleaved trace, an exception from `project/1`
+failing invariant, an interleaved trace, a `Pending` step that `step/2`
+didn't leave pending, an exception from `project/1`
 or `expected/2` on the initial state (at step 0), and an `{:error, message}`
 from `finish/2` (at the last step). Other exceptions from the
 adapter propagate as they are, without the prefix. That includes a missing
@@ -471,8 +530,9 @@ written as `~w(plans)`, but not as module attributes or variables.
 
 ## Limitations
 
-- Replays are sequential: a trace whose actions interleave (two pending
-  steps) is refused.
+- Replays are sequential: a trace whose calls overlap (two pending steps,
+  see [Concurrency](#concurrency)) is refused. Concurrent replay, with
+  `step/2` returning `{:start, …}` and `{:complete, …}`, is planned.
 - `random:` takes no invariants to check; any non-zero exit of
   `quint run` fails generation.
 - Model integers are limited to the signed 64-bit range by Quint.

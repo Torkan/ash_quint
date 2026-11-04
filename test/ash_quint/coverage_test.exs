@@ -44,6 +44,22 @@ defmodule AshQuint.CoverageTest do
               }}
   end
 
+  test "an action that both starts and completes ops shows pending next to outcomes" do
+    {:ok, coverage} =
+      Coverage.from_manifest(
+        manifest([
+          trace("a", 8, %{"Inc" => 8}, %{
+            "Inc" => %{"pending" => 4, "accepted" => 3, "rejected:over_limit" => 1}
+          })
+        ])
+      )
+
+    assert Coverage.format("m", coverage) == [
+             "m: 1 trace, 8 steps",
+             "  Inc  8  accepted 3  pending 4  rejected:over_limit 1"
+           ]
+  end
+
   test "a version 1 manifest has no outcomes" do
     manifest = manifest([%{trace("a", 1, %{"Inc" => 1}, nil) | outcomes: nil}])
     assert Coverage.from_manifest(manifest) == {:error, :no_outcomes}

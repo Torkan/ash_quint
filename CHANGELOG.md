@@ -22,6 +22,22 @@
 - `AshQuint.Config.select!/2` selects models by name, for Mix tasks.
 - `allow_untested` takes `~w(...)` and `~W(...)` sigils as well as literal
   lists of strings.
+- The model convention for concurrency: a start action sets
+  `lastResult' = Pending` and the action names its call with an `op` field;
+  the completing action has the outcome. `AshQuint.Step` decodes `Pending`
+  to `:pending` and the op into `step.op`; models set the names with
+  `pending_result:` and `op_field:` (default `"Pending"` and `"op"`).
+  `AshQuint.Replay` takes both as options.
+- Manifest entries (format 2) of traces with a call in flight have
+  `"concurrent": true` and `"max_in_flight"`. Both are optional on read, so
+  sequential models' manifests are unchanged. `Pending` steps count as
+  `pending` in `outcomes`, `AshQuint.Step.result_label/1` and the coverage
+  table.
+- `priv/examples/race`: a model of two concurrent `Inc`s against a limit,
+  with committed traces.
+- Replays are still sequential. The interleaved-trace failure now points at
+  the planned `{:start, …}`/`{:complete, …}` API, and a `Pending` step
+  whose `step/2` returns `{:ok, …}` or `{:skip, …}` fails.
 
 ## 0.1.0
 

@@ -47,6 +47,8 @@ defmodule AshQuint.ConfigTest do
              seed: 1,
              action_path: ["lastAction"],
              result_path: ["lastResult"],
+             pending_result: "Pending",
+             op_field: "op",
              init_action: "Init",
              random: [main: "step"],
              witnesses: nil,
@@ -72,6 +74,8 @@ defmodule AshQuint.ConfigTest do
           on_missing_model: :skip,
           action_path: ["last", "action"],
           result_path: ["last", "result"],
+          pending_result: "InFlight",
+          op_field: "id",
           init_action: "Start"
         )
       )
@@ -83,6 +87,8 @@ defmodule AshQuint.ConfigTest do
              on_missing_model: :skip,
              action_path: ["last", "action"],
              result_path: ["last", "result"],
+             pending_result: "InFlight",
+             op_field: "id",
              init_action: "Start"
            } = model
 
@@ -357,6 +363,24 @@ defmodule AshQuint.ConfigTest do
     assert_raises_config(
       minimal(init_action: :init),
       "ash_quint.exs: models.counter.init_action must be a string, got :init"
+    )
+
+    assert_raises_config(
+      minimal(pending_result: :pending),
+      "ash_quint.exs: models.counter.pending_result must be a string, got :pending"
+    )
+
+    for result <- ["Accepted", "Rejected"] do
+      assert_raises_config(
+        minimal(pending_result: result),
+        "ash_quint.exs: models.counter.pending_result can't be #{result}, " <>
+          "which is already a result"
+      )
+    end
+
+    assert_raises_config(
+      minimal(op_field: ["op"]),
+      ~s(ash_quint.exs: models.counter.op_field must be a string, got ["op"])
     )
 
     assert_raises_config(

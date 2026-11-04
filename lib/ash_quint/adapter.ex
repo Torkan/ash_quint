@@ -15,7 +15,8 @@ defmodule AshQuint.Adapter do
     * `step/2` performs the step's action. Return `{:ok, result, ctx}` after
       a system call, `{:pending, ctx}` when the action only starts a call
       that a later step completes, or `{:skip, ctx}` for a model-only step
-      (state is compared, no outcome is asserted).
+      (state is compared, no outcome is asserted). A step whose result is
+      `Pending` (`step.result == :pending`) must return `{:pending, ctx}`.
     * `project/1` returns the system's state, keyed by the model variables
       it covers.
     * `expected/2` (optional) returns the model's value for each projected

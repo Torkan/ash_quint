@@ -13,8 +13,11 @@ defmodule Mix.Tasks.AshQuint.GenTest do
 
   setup %{tmp_dir: tmp_dir} do
     File.cp!("ash_quint.exs", Path.join(tmp_dir, "ash_quint.exs"))
-    File.mkdir_p!(Path.join(tmp_dir, @example))
-    File.cp_r!(@example, Path.join(tmp_dir, @example))
+    # The root config has both examples; --check needs them all.
+    for example <- [@example, "priv/examples/race"] do
+      File.mkdir_p!(Path.join(tmp_dir, example))
+      File.cp_r!(example, Path.join(tmp_dir, example))
+    end
 
     Mix.shell(Mix.Shell.Process)
     on_exit(fn -> Mix.shell(Mix.Shell.IO) end)
