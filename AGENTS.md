@@ -189,6 +189,22 @@ $Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10
   for JSON. The floor applies to `lib/` and the test env; dev-only tools
   may need newer Elixir (`usage_rules` needs ~> 1.18, so CI validates the
   usage rules only in the 1.20 job's dev steps).
+- **Checking another Elixir (e.g. the 1.17 floor):** never run
+  `mix local.hex` or `mix local.rebar`, and don't rely on
+  `mise exec elixir@…`. mise exports `MIX_HOME` and `MIX_ARCHIVES` for the
+  active Elixir, and in an activated shell `mise exec` changes `MIX_HOME`
+  but leaves the active `elixir` first on `PATH`. A mixed toolchain then
+  writes one version's archives with another's OTP, which breaks Hex for
+  every mix task. Set all four explicitly, in a scratch copy of the repo,
+  and check `elixir --version` first:
+
+  ```sh
+  I=$HOME/.local/share/mise/installs
+  env PATH="$I/elixir/1.17.3-otp-27/bin:$I/erlang/27.3.4.3/bin:$PATH" \
+    MIX_HOME="$I/elixir/1.17.3-otp-27/.mix" \
+    MIX_ARCHIVES="$I/elixir/1.17.3-otp-27/.mix/archives" \
+    sh -c 'elixir --version && MIX_ENV=test mix test --warnings-as-errors'
+  ```
 - **No atoms from trace data:** model names, tags and keys stay strings.
 - Every public module and function gets `@moduledoc`/`@doc` and a `@spec`.
 - **Off-limits:** never edit, stage or commit `mise.toml` or `mise.local.toml`.
