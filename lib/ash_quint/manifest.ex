@@ -50,6 +50,13 @@ defmodule AshQuint.Manifest do
   traces and are optional on read, in every format version: absent means
   `concurrent: false` and `max_in_flight: 0`.
 
+  `source` is `random`, `witness`, `scenario` or `regression`. A
+  regression entry (a trace committed by `mix ash_quint.promote`, named
+  `<seed>_<index>`) also has its own `seed`, the seed it was found with,
+  which its replay uses instead of the manifest's. `seed` is written only
+  for entries that have one and is optional on read; when present it must
+  be an integer.
+
   The encoding is deterministic: keys sorted at every level, traces sorted by
   file name, no timestamps.
 
@@ -73,14 +80,15 @@ defmodule AshQuint.Manifest do
   @type outcomes :: %{String.t() => %{String.t() => pos_integer()}}
 
   @type entry :: %{
-          file: String.t(),
-          source: AshQuint.Trace.source(),
-          name: String.t(),
-          steps: non_neg_integer(),
-          actions: %{String.t() => pos_integer()},
-          outcomes: outcomes() | nil,
-          concurrent: boolean(),
-          max_in_flight: non_neg_integer()
+          required(:file) => String.t(),
+          required(:source) => AshQuint.Trace.source(),
+          required(:name) => String.t(),
+          required(:steps) => non_neg_integer(),
+          required(:actions) => %{String.t() => pos_integer()},
+          required(:outcomes) => outcomes() | nil,
+          required(:concurrent) => boolean(),
+          required(:max_in_flight) => non_neg_integer(),
+          optional(:seed) => integer()
         }
 
   @type t :: %__MODULE__{
@@ -92,7 +100,12 @@ defmodule AshQuint.Manifest do
           traces: [entry()]
         }
 
-  @sources %{"random" => :random, "witness" => :witness, "scenario" => :scenario}
+  @sources %{
+    "random" => :random,
+    "witness" => :witness,
+    "scenario" => :scenario,
+    "regression" => :regression
+  }
 
   @doc """
   The hash of the file at `path`: `"sha256:"` followed by lowercase hex.
@@ -126,6 +139,7 @@ defmodule AshQuint.Manifest do
           "steps" => entry.steps
         }
         |> Map.merge(concurrency(entry))
+        |> Map.merge(entry_seed(entry))
         |> ordered()
       end)
 
@@ -155,6 +169,9 @@ defmodule AshQuint.Manifest do
     do: %{"concurrent" => true, "max_in_flight" => max}
 
   defp concurrency(_entry), do: %{}
+
+  defp entry_seed(%{seed: seed}), do: %{"seed" => seed}
+  defp entry_seed(_entry), do: %{}
 
   @doc """
   Reads the manifest at `path`. A missing file raises `File.Error`; an
@@ -236,6 +253,7 @@ defmodule AshQuint.Manifest do
       outcomes: outcomes!(json, version, file, index, path)
     }
     |> Map.merge(concurrency!(json, file, path))
+    |> Map.merge(seed!(json, file, path))
   end
 
   defp entry!({_entry, index}, _version, path) do
@@ -277,6 +295,13 @@ defmodule AshQuint.Manifest do
         )
     end
   end
+
+  defp seed!(%{"seed" => seed}, _file, _path) when is_integer(seed), do: %{seed: seed}
+
+  defp seed!(%{"seed" => _seed}, file, path),
+    do: fail!(path, "invalid manifest: seed of #{file} must be an integer")
+
+  defp seed!(_json, _file, _path), do: %{}
 
   defp counts?(map),
     do: Enum.all?(map, fn {k, v} -> is_binary(k) and is_integer(v) and v > 0 end)

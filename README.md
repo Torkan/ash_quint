@@ -291,6 +291,63 @@ the counter example the interface is:
 
 Commit the traces and the manifest.
 
+### Regression traces
+
+A trace that once found a bug can be kept as a regression trace:
+`<out>/regression_<seed>_<index>.itf.json`, a trace with its provenance in
+one more top-level `#meta` key (the replay ignores the top-level `#meta`):
+
+```json
+"#meta": {
+  "format": "ITF", "source": "priv/examples/counter/model.qnt", "status": "ok",
+  "ash_quint": {
+    "args": ["run", "priv/examples/counter/model.qnt", "--main=counter", "--seed=4031", …],
+    "cut_at": 5, "index": 2, "model": "counter", "model_hash": "sha256:…",
+    "quint": "0.33.1", "seed": 4031, "steps": 10
+  }
+}
+```
+
+`model_hash` is the model file's hash when the trace was found, `seed` and
+`index` the Quint run and the trace's place in its batch. The file is the
+regression: Quint is never rerun for it.
+
+Commit one with `mix ash_quint.promote`:
+
+```sh
+MIX_ENV=test mix ash_quint.promote <candidate> ...
+```
+
+For each file it copies it, byte for byte, to
+`<out>/regression_<seed>_<index>.itf.json` and adds its entry (source
+`regression`, with its own `seed`) to the model's manifest, without
+running Quint:
+
+```
+ash_quint.promote: counter: added regression_4031_2.itf.json (5 steps)
+```
+
+It checks every file before writing any: a file without `#meta.ash_quint`,
+an unknown model, a missing manifest or one older than format 3 (run
+`mix ash_quint.gen` first), a `model_hash` other than both the manifest's
+and the model file's current hash (regenerate, and find the trace again),
+or a target that already exists is an error, and nothing is written.
+
+`mix ash_quint.gen` keeps every `regression_*.itf.json` in `out` as it is
+and rebuilds its manifest entry, so neither a regeneration nor `--check`
+reports it. A regression file without `#meta.ash_quint` is a gen error.
+When the model has changed since the trace was found, gen keeps it and
+says so:
+
+```
+ash_quint.gen: counter: regression_4031_2.itf.json was found against an earlier model; delete it if it no longer applies
+```
+
+Gen can't tell whether the trace is still a behaviour of the new model; a
+replay that now fails against a correct system shows it isn't. To drop a
+regression trace, delete its file and rerun `mix ash_quint.gen`: its
+entry goes with it.
+
 ## Coverage: `mix ash_quint.coverage`
 
 ```sh
@@ -596,10 +653,12 @@ Put it after `use ExUnit.Case` or your case template, so the template's
 sandbox and `async` apply. At compile time it reads `ash_quint.exs` and the
 model's manifest and defines:
 
-- one test per trace, named `"random 0"`, `"witness witOverLimit"` or
-  `"scenario incTest"`, tagged `quint: <source>` and `quint_model: <model>`,
-  and `quint_concurrent: true` when the manifest marks the trace
-  concurrent;
+- one test per trace, named `"random 0"`, `"witness witOverLimit"`,
+  `"scenario incTest"` or `"regression 4031_2"`, tagged `quint: <source>`
+  and `quint_model: <model>`, and `quint_concurrent: true` when the
+  manifest marks the trace concurrent. A regression trace (see "Regression
+  traces") is replayed with the seed it was found with, the others with
+  the manifest's;
 - `"traces for counter are current"`, which fails when a model file's hash
   no longer matches the manifest: run `mix ash_quint.gen counter`;
 - with `sensitivity:`, `"sensitivity of counter"` (see below).
@@ -609,7 +668,7 @@ the module recompiles when they change. An unknown model, a missing
 manifest or one without traces is a compile error.
 
 Select the tests by tag: `mix test --only quint_model:counter`,
-`mix test --only quint:witness`.
+`mix test --only quint:witness`, `mix test --only quint:regression`.
 
 Concurrent traces run their calls in op tasks, other processes than the
 test's. A private ETS table, per-process state or a database sandbox in

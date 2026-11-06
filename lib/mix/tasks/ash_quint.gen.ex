@@ -25,6 +25,15 @@ defmodule Mix.Tasks.AshQuint.Gen do
   outcomes the new traces reach. `--check` and `--dry-run` print only
   the file changes.
 
+  A `regression_*.itf.json` file in `out`, committed by
+  `mix ash_quint.promote`, is kept as it is, and its manifest entry
+  rebuilt (see `AshQuint.Gen`). One found against an earlier version of
+  the model is kept too, with a note, in every mode:
+
+      ash_quint.gen: counter: regression_4031_2.itf.json was found against an earlier model; delete it if it no longer applies
+
+  To drop a regression trace, delete its file and rerun the task.
+
   Nothing is written unless every model generates. Quint failing or not
   being runnable, a failing scenario, a witness not reached, a random run
   or a compile exiting non-zero all raise with Quint's output, as does an
@@ -54,6 +63,10 @@ defmodule Mix.Tasks.AshQuint.Gen do
         {:ok, generated} -> generated
         {:error, message} -> Mix.raise(message)
       end
+
+    for model <- models, note <- Map.fetch!(generated, model.name).notes do
+      Mix.shell().info("ash_quint.gen: " <> note)
+    end
 
     if opts[:check] || opts[:dry_run] do
       report(config, models, generated, opts[:check])

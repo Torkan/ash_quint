@@ -17,10 +17,12 @@ defmodule AshQuint.Case do
   (`<out>/manifest.json`) and defines:
 
     * a test per trace, named `"<source> <name>"` (`"random 7"`,
-      `"witness witA"`, `"scenario incTest"`) and tagged `quint: <source>`
-      and `quint_model: <model>` (and `quint_concurrent: true` when the
-      manifest marks the trace concurrent), which replays the trace with
-      `AshQuint.Replay.run!/3`;
+      `"witness witA"`, `"scenario incTest"`, `"regression 4031_2"`) and
+      tagged `quint: <source>` and `quint_model: <model>` (and
+      `quint_concurrent: true` when the manifest marks the trace
+      concurrent), which replays the trace with `AshQuint.Replay.run!/3`,
+      with the manifest's seed, or a regression entry's own seed (the
+      seed it was found with; see `mix ash_quint.promote`);
     * `"traces for <model> are current"`, tagged `quint_model: <model>`,
       which fails when a model file's hash differs from the manifest's, so
       the traces need regenerating with `mix ash_quint.gen`.
@@ -415,8 +417,11 @@ defmodule AshQuint.Case do
     end
   end
 
-  defp trace(entry, out, seed),
-    do: {Path.join(out, entry.file), [name: entry.name, source: entry.source, seed: seed]}
+  # A regression entry carries the seed it was found with.
+  defp trace(entry, out, seed) do
+    seed = Map.get(entry, :seed, seed)
+    {Path.join(out, entry.file), [name: entry.name, source: entry.source, seed: seed]}
+  end
 
   defp trace_test(entry, out, setup, replay_opts) do
     {path, trace_opts} = trace(entry, out, setup.manifest.seed)

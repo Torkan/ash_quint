@@ -7,13 +7,15 @@ defmodule AshQuint.Trace do
   state, keyed by those names, with values decoded by `AshQuint.ITF`.
 
   `name`, `source` and `seed` come from the manifest; they are `nil` for a
-  trace read with `AshQuint.ITF.read!/1`.
+  trace read with `AshQuint.ITF.read!/1`. `seed` is the manifest's, or a
+  regression trace's own (source `:regression`, committed by
+  `mix ash_quint.promote`).
   """
 
   @enforce_keys [:path, :vars, :states]
   defstruct name: nil, source: nil, seed: nil, path: nil, vars: [], states: []
 
-  @type source :: :random | :witness | :scenario
+  @type source :: :random | :witness | :scenario | :regression
 
   @type t :: %__MODULE__{
           name: String.t() | nil,

@@ -105,6 +105,7 @@ defmodule AshQuint.MixProject do
         Mix: [
           Mix.Tasks.AshQuint.Gen,
           AshQuint.Gen,
+          Mix.Tasks.AshQuint.Promote,
           Mix.Tasks.AshQuint.Coverage,
           AshQuint.Coverage,
           AshQuint.Config,

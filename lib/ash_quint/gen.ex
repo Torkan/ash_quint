@@ -26,6 +26,19 @@ defmodule AshQuint.Gen do
       `scenarios:` (the tests file). Any non-zero exit is an error, as is
       an IR the interface can't be read from (see `interface_command/3`).
 
+  ## Regression traces
+
+  A `regression_<name>.itf.json` file in the model's `out` directory is a
+  trace `mix ash_quint.promote` committed. It isn't generated, so
+  `generate/3` keeps it: it adds the file to `files` byte for byte, with
+  its entry built by `regression_entry!/3`, so `write!/2` leaves it as it
+  is and `diff/2` never reports it. A regression file whose provenance
+  (`provenance/1`) records another model hash than the model file's
+  current one is still kept, with a note in `notes`: gen can't tell
+  whether the trace is still a behaviour of the new model. A regression
+  file without provenance is an error. Deleting a regression file drops
+  its entry at the next generation.
+
   Nothing is written by `generate/3`; `write!/2` writes one model's result.
   """
 
@@ -44,7 +57,11 @@ defmodule AshQuint.Gen do
           out: String.t()
         }
 
-  @type generated :: %{files: %{String.t() => binary()}, manifest: binary()}
+  @type generated :: %{
+          files: %{String.t() => binary()},
+          manifest: binary(),
+          notes: [String.t()]
+        }
 
   @type diff :: %{added: [String.t()], changed: [String.t()], removed: [String.t()]}
 
@@ -357,6 +374,20 @@ defmodule AshQuint.Gen do
         entry(file, source, name, trace, model)
       end)
 
+    model_hash = Manifest.hash_file(Path.join(config.root, model.model))
+    regressions = regressions(config, model)
+
+    regression_entries =
+      Enum.map(regressions, fn {file, binary} -> regression_entry!(file, binary, model) end)
+
+    notes =
+      for {file, binary} <- regressions,
+          {:ok, provenance} = provenance(binary),
+          provenance["model_hash"] != model_hash do
+        "#{model.name}: #{file} was found against an earlier model; " <>
+          "delete it if it no longer applies"
+      end
+
     paths = [model.model] ++ if(model.scenarios, do: [model.tests], else: [])
 
     manifest = %Manifest{
@@ -364,13 +395,22 @@ defmodule AshQuint.Gen do
       quint: config.quint,
       seed: model.seed,
       models: Map.new(paths, &{&1, Manifest.hash_file(Path.join(config.root, &1))}),
-      traces: entries
+      traces: entries ++ regression_entries
     }
 
-    {:ok, %{files: files, manifest: Manifest.encode(manifest)}}
+    files = Map.merge(files, Map.new(regressions))
+    {:ok, %{files: files, manifest: Manifest.encode(manifest), notes: notes}}
   rescue
     error in [ArgumentError, ITF.Error] ->
       {:error, "model #{inspect(model.name)}: " <> Exception.message(error)}
+  end
+
+  defp regressions(config, model) do
+    [config.root, model.out, "regression_*.itf.json"]
+    |> Path.join()
+    |> Path.wildcard()
+    |> Enum.sort()
+    |> Enum.map(&{Path.basename(&1), File.read!(&1)})
   end
 
   defp source_and_name("random_" <> rest), do: {:random, trim_ext(rest)}
@@ -378,6 +418,87 @@ defmodule AshQuint.Gen do
   defp source_and_name("scenario_" <> rest), do: {:scenario, trim_ext(rest)}
 
   defp trim_ext(file), do: String.replace_suffix(file, ".itf.json", "")
+
+  @doc """
+  The manifest entry for the regression trace `binary`, the contents of
+  `file` (`regression_<name>.itf.json`): `entry/5` with source
+  `:regression` and the name from the file name, plus the `seed` from its
+  provenance (see `provenance/1`). Raises `ArgumentError` when the trace
+  has no provenance or its seed isn't an integer.
+  """
+  @spec regression_entry!(String.t(), binary(), Model.t()) :: Manifest.entry()
+  def regression_entry!(file, binary, %Model{} = model) do
+    seed =
+      case provenance(binary) do
+        {:ok, %{"seed" => seed}} when is_integer(seed) ->
+          seed
+
+        {:ok, _provenance} ->
+          raise ArgumentError, "#{file}: #meta.ash_quint.seed must be an integer"
+
+        :error ->
+          raise ArgumentError,
+                "#{file} has no #meta.ash_quint; " <>
+                  "only mix ash_quint.promote writes regression traces"
+      end
+
+    "regression_" <> name = trim_ext(file)
+    trace = ITF.decode!(Jason.decode!(binary), file)
+
+    file
+    |> entry(:regression, name, trace, model)
+    |> Map.put(:seed, seed)
+  end
+
+  @doc """
+  A trace's provenance: the top-level `#meta.ash_quint` object, with
+  string keys, which records where an explored trace came from (model,
+  model hash, seed, index, Quint version and arguments). `:error` when
+  the trace has none, or it isn't an object.
+  """
+  @spec provenance(binary()) :: {:ok, map()} | :error
+  def provenance(binary) do
+    case Jason.decode(binary) do
+      {:ok, %{"#meta" => %{"ash_quint" => provenance}}} when is_map(provenance) ->
+        {:ok, provenance}
+
+      _other ->
+        :error
+    end
+  end
+
+  @doc """
+  Sets a trace's provenance (see `provenance/1`): `#meta.ash_quint`
+  becomes `provenance`, with its keys sorted, replacing an earlier one in
+  place or else appended to the top-level `#meta`. Everything else is
+  kept, key order included. Like `normalize/1`, the result is compact
+  JSON without a trailing newline.
+  """
+  @spec put_provenance(binary(), map()) :: binary()
+  def put_provenance(binary, provenance) do
+    %Jason.OrderedObject{values: values} = Jason.decode!(binary, objects: :ordered_objects)
+    entry = {"ash_quint", sorted(provenance)}
+
+    values =
+      Enum.map(values, fn
+        {"#meta", %Jason.OrderedObject{values: meta}} ->
+          meta =
+            if List.keymember?(meta, "ash_quint", 0),
+              do: List.keyreplace(meta, "ash_quint", 0, entry),
+              else: meta ++ [entry]
+
+          {"#meta", %Jason.OrderedObject{values: meta}}
+
+        other ->
+          other
+      end)
+
+    Jason.encode!(%Jason.OrderedObject{values: values})
+  end
+
+  defp sorted(map) when is_map(map) do
+    map |> Enum.sort_by(&elem(&1, 0)) |> Jason.OrderedObject.new()
+  end
 
   @doc """
   The manifest entry for a generated trace: `steps` is the number of states

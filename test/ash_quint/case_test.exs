@@ -71,6 +71,32 @@ defmodule AshQuint.CaseTest do
              "ok scenario incTest, step 1 (Inc), seed 7: key \"count\":\n  expected: 2\n  actual:   3"
   end
 
+  test "a regression entry gets its own test with its seed" do
+    tests = tests(compile(:promoted))
+
+    assert Enum.sort(Map.keys(tests)) == [
+             :"test regression 4031_2",
+             :"test scenario incTest",
+             :"test traces for promoted are current"
+           ]
+
+    assert %{quint: :regression, quint_model: :promoted} = tests[:"test regression 4031_2"]
+    assert run_test(compile(:promoted), "regression 4031_2") == :ok
+
+    mod =
+      compile(
+        :promoted,
+        "use ExUnit.Case, register: false",
+        ", adapter_opts: [faults: [:off_by_one]]"
+      )
+
+    error = assert_raise ExUnit.AssertionError, fn -> run_test(mod, "regression 4031_2") end
+    assert error.message =~ ~r/^promoted regression 4031_2, step 1 \(Inc\), seed 4031: /
+
+    error = assert_raise ExUnit.AssertionError, fn -> run_test(mod, "scenario incTest") end
+    assert error.message =~ ~r/^promoted scenario incTest, step 1 \(Inc\), seed 7: /
+  end
+
   test "staleness passes when hashes match" do
     assert run_test(compile(:ok), "traces for ok are current")
   end

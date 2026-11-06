@@ -741,6 +741,176 @@ defmodule AshQuint.GenTest do
     end
   end
 
+  describe "provenance" do
+    test "put_provenance adds #meta.ash_quint and keeps the rest" do
+      trace = Gen.normalize(itf(@model_file, "ok", [@inc]))
+      provenance = %{"seed" => 5, "index" => 1, "model" => "counter", "cut_at" => nil}
+      promoted = Gen.put_provenance(trace, provenance)
+
+      assert Gen.provenance(promoted) == {:ok, provenance}
+      refute String.ends_with?(promoted, "\n")
+
+      original = Jason.decode!(trace, objects: :ordered_objects)
+      decoded = Jason.decode!(promoted, objects: :ordered_objects)
+
+      assert Enum.map(decoded["#meta"].values, &elem(&1, 0)) ==
+               Enum.map(original["#meta"].values, &elem(&1, 0)) ++ ["ash_quint"]
+
+      assert Enum.map(decoded["#meta"]["ash_quint"].values, &elem(&1, 0)) ==
+               ["cut_at", "index", "model", "seed"]
+
+      assert Enum.map(decoded.values, &elem(&1, 0)) == ["#meta", "vars", "states"]
+      assert decoded["vars"] == original["vars"]
+      assert decoded["states"] == original["states"]
+
+      assert Gen.put_provenance(trace, provenance) == promoted
+      replaced = Gen.put_provenance(promoted, %{"seed" => 6})
+      assert Gen.provenance(replaced) == {:ok, %{"seed" => 6}}
+
+      assert Enum.map(
+               Jason.decode!(replaced, objects: :ordered_objects)["#meta"].values,
+               &elem(&1, 0)
+             ) ==
+               Enum.map(decoded["#meta"].values, &elem(&1, 0))
+    end
+
+    test "provenance of a plain trace is :error" do
+      assert Gen.provenance(Gen.normalize(itf(@model_file, "ok", [@inc]))) == :error
+
+      not_an_object =
+        Jason.encode!(%{"#meta" => %{"ash_quint" => "x"}, "vars" => [], "states" => []})
+
+      assert Gen.provenance(not_an_object) == :error
+    end
+  end
+
+  describe "regression traces" do
+    setup :setup_root
+
+    # A regression file in the counter's out, with provenance for seed 5,
+    # index 1 and `hash` (the current model hash by default).
+    defp put_regression(root, provenance \\ %{}) do
+      hash = Manifest.hash_file(Path.join(root, @model_file))
+      out = Path.join(root, "priv/x/traces")
+      File.mkdir_p!(out)
+
+      binary =
+        itf(@model_file, "ok", [@inc, @reset])
+        |> Gen.normalize()
+        |> Gen.put_provenance(
+          Map.merge(
+            %{"model" => "counter", "model_hash" => hash, "seed" => 5, "index" => 1},
+            provenance
+          )
+        )
+
+      File.write!(Path.join(out, "regression_5_1.itf.json"), binary)
+      {out, binary}
+    end
+
+    defp generate_counter(root, tmp) do
+      config = config(root)
+
+      {:ok, %{counter: generated}} =
+        Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp)
+
+      generated
+    end
+
+    test "keeps regression traces in out byte for byte", %{root: root, tmp: tmp} do
+      {out, binary} = put_regression(root)
+      generated = generate_counter(root, tmp)
+
+      assert generated.files["regression_5_1.itf.json"] == binary
+      assert generated.notes == []
+
+      assert %{source: :regression, name: "5_1", seed: 5, steps: 2} =
+               generated.manifest
+               |> Manifest.decode!("m")
+               |> Map.fetch!(:traces)
+               |> Enum.find(&(&1.file == "regression_5_1.itf.json"))
+
+      Gen.write!(out, generated)
+      assert File.read!(Path.join(out, "regression_5_1.itf.json")) == binary
+      assert Gen.diff(out, generated) == %{added: [], changed: [], removed: []}
+    end
+
+    test "a regression trace from an earlier model is kept with a note", %{root: root, tmp: tmp} do
+      {_out, binary} = put_regression(root, %{"model_hash" => "sha256:old"})
+      generated = generate_counter(root, tmp)
+
+      assert generated.files["regression_5_1.itf.json"] == binary
+
+      assert generated.notes == [
+               "counter: regression_5_1.itf.json was found against an earlier model; " <>
+                 "delete it if it no longer applies"
+             ]
+    end
+
+    test "a regression file without provenance is an error", %{root: root, tmp: tmp} do
+      out = Path.join(root, "priv/x/traces")
+      File.mkdir_p!(out)
+
+      File.write!(
+        Path.join(out, "regression_5_1.itf.json"),
+        Gen.normalize(itf(@model_file, "ok", [@inc]))
+      )
+
+      config = config(root)
+
+      assert Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp) ==
+               {:error,
+                "model :counter: regression_5_1.itf.json has no #meta.ash_quint; " <>
+                  "only mix ash_quint.promote writes regression traces"}
+    end
+
+    test "deleting a regression file drops its entry", %{root: root, tmp: tmp} do
+      {out, _binary} = put_regression(root)
+      Gen.write!(out, generate_counter(root, tmp))
+      File.rm!(Path.join(out, "regression_5_1.itf.json"))
+
+      generated = generate_counter(root, tmp)
+      refute Map.has_key?(generated.files, "regression_5_1.itf.json")
+
+      refute Enum.any?(
+               Manifest.decode!(generated.manifest, "m").traces,
+               &(&1.source == :regression)
+             )
+
+      Gen.write!(out, generated)
+      refute File.exists?(Path.join(out, "regression_5_1.itf.json"))
+    end
+
+    test "a regression file whose provenance has no integer seed is an error", %{
+      root: root,
+      tmp: tmp
+    } do
+      put_regression(root, %{"seed" => "5"})
+      config = config(root)
+
+      assert Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp) ==
+               {:error,
+                "model :counter: regression_5_1.itf.json: #meta.ash_quint.seed must be an integer"}
+    end
+
+    test "regression_entry! builds the entry with its seed", %{root: root} do
+      {_out, binary} = put_regression(root)
+      model = config(root).models.counter
+
+      assert Gen.regression_entry!("regression_5_1.itf.json", binary, model) == %{
+               file: "regression_5_1.itf.json",
+               source: :regression,
+               name: "5_1",
+               seed: 5,
+               steps: 2,
+               actions: %{"Inc" => 1, "Reset" => 1},
+               outcomes: %{},
+               concurrent: false,
+               max_in_flight: 0
+             }
+    end
+  end
+
   describe "diff/2 and write!/2" do
     setup %{tmp_dir: tmp_dir} do
       out = Path.join(tmp_dir, "out")

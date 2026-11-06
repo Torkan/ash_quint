@@ -62,7 +62,10 @@ mix test.check_migrations
   `priv/examples/counter/model-tests.qnt`).
 - `AshQuint.Config`, `AshQuint.Manifest`, `AshQuint.Gen`,
   `Mix.Tasks.AshQuint.Gen` — `ash_quint.exs`, the manifest and
-  `mix ash_quint.gen`.
+  `mix ash_quint.gen` (which keeps `regression_*.itf.json` files as they
+  are; provenance helpers in `AshQuint.Gen`).
+- `Mix.Tasks.AshQuint.Promote` — `mix ash_quint.promote`: commits explore
+  candidates as regression traces (source `regression`, per-entry `seed`).
 - `AshQuint.Coverage`, `Mix.Tasks.AshQuint.Coverage` — the action × outcome
   table of the committed manifests, `mix ash_quint.coverage` (also printed
   by `mix ash_quint.gen` after writing).

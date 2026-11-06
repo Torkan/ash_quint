@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Regression traces: `mix ash_quint.promote <candidate> ...` commits a
+  trace with its provenance in `#meta.ash_quint` (model, model hash, seed,
+  index) as `<out>/regression_<seed>_<index>.itf.json`, byte for byte, and
+  adds its entry to the manifest: source `regression`, with the entry's
+  own `seed`. `AshQuint.Case` generates a `"regression <seed>_<index>"`
+  test for it, tagged `quint: :regression` and replayed with that seed.
+  `mix ash_quint.gen` keeps regression files as they are, notes one found
+  against an earlier model, and refuses one without provenance. Manifest
+  entries may carry an integer `seed`; `AshQuint.Gen` gains
+  `provenance/1`, `put_provenance/2` and `regression_entry!/3`, and its
+  `generated` map `notes`.
 - The manifest is format 3: `mix ash_quint.gen` runs
   `quint compile --target=json` for each model after its traces and
   records the model's `interface`: its actions with their pick shapes

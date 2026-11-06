@@ -106,6 +106,32 @@ defmodule Mix.Tasks.AshQuint.GenTest do
       end
     end
 
+    test "keeps a regression trace and prints its note", %{root: root} do
+      binary =
+        Path.join(@traces, "random_0.itf.json")
+        |> File.read!()
+        |> AshQuint.Gen.put_provenance(%{
+          "model" => "counter",
+          "model_hash" => "sha256:old",
+          "seed" => 1,
+          "index" => 0
+        })
+
+      file = Path.join([root, @traces, "regression_1_0.itf.json"])
+      File.write!(file, binary)
+
+      note =
+        "ash_quint.gen: counter: regression_1_0.itf.json was found against an earlier " <>
+          "model; delete it if it no longer applies"
+
+      gen(root, ["counter"])
+      assert [^note, "ash_quint.gen: counter: wrote " <> _ | _coverage] = infos()
+      assert File.read!(file) == binary
+
+      gen(root, ["--check"])
+      assert infos() == [note, "ash_quint.gen: traces are current"]
+    end
+
     test "--dry-run writes nothing", %{root: root} do
       file = Path.join([root, @traces, "witness_witOverLimit.itf.json"])
       File.rm!(file)

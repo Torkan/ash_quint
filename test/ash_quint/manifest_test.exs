@@ -121,6 +121,61 @@ defmodule AshQuint.ManifestTest do
     assert encoded =~ ~s(\n  },\n  "models": {\n)
   end
 
+  test "round-trips a regression entry with its seed" do
+    manifest = manifest([{"regression_4031_2.itf.json", :regression, "4031_2"}])
+    manifest = %{manifest | traces: Enum.map(manifest.traces, &Map.put(&1, :seed, 4031))}
+
+    assert %Manifest{traces: [%{source: :regression, name: "4031_2", seed: 4031}]} =
+             decoded = Manifest.decode!(Manifest.encode(manifest), @path)
+
+    assert decoded == manifest
+  end
+
+  test "writes seed only for entries that have one" do
+    manifest = manifest([hd(@entries), {"regression_4031_2.itf.json", :regression, "4031_2"}])
+
+    traces =
+      Enum.map(manifest.traces, fn
+        %{source: :regression} = entry -> Map.put(entry, :seed, 4031)
+        entry -> entry
+      end)
+
+    encoded = Manifest.encode(%{manifest | traces: traces})
+
+    assert encoded =~
+             ~r/"name": "4031_2",\n      "outcomes": \{\n.*\n      \},\n      "seed": 4031,\n      "source": "regression",\n/s
+
+    assert length(Regex.scan(~r/"seed"/, encoded)) == 2
+
+    assert [%{source: :regression, seed: 4031}, scenario] =
+             Manifest.decode!(encoded, @path).traces
+
+    refute Map.has_key?(scenario, :seed)
+  end
+
+  test "refuses a non-integer seed" do
+    trace = %{
+      "file" => "regression_4031_2.itf.json",
+      "source" => "regression",
+      "name" => "4031_2",
+      "steps" => 2,
+      "actions" => %{"Inc" => 1},
+      "outcomes" => %{"Inc" => %{"accepted" => 1}}
+    }
+
+    for seed <- ["4031", 1.5, nil] do
+      assert_raise ArgumentError,
+                   "#{@path}: invalid manifest: seed of regression_4031_2.itf.json must be " <>
+                     "an integer",
+                   fn ->
+                     Manifest.decode!(
+                       json(%{"traces" => [Map.put(trace, "seed", seed)]}),
+                       @path
+                     )
+                   end
+    end
+  end
+
   test "refuses to encode without an interface" do
     assert_raise ArgumentError, "manifest has no interface", fn ->
       Manifest.encode(%{manifest(@entries) | interface: nil})
