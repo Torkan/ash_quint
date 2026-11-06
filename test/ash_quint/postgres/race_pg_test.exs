@@ -9,7 +9,7 @@ defmodule AshQuint.Postgres.RacePgTest do
     model: :race,
     adapter: AshQuint.Test.RacePgAdapter,
     traces: :concurrent,
-    sensitivity: true
+    sensitivity: [allow_untested: [vars: ~w(inflight finished)]]
 
   alias AshQuint.{Config, Manifest, Replay, Trace}
   alias AshQuint.Test.RacePgAdapter

@@ -189,7 +189,7 @@ defmodule AshQuint.SensitivityTest do
              never_overlap: [],
              survived: [],
              untested: [],
-             tested: [{:key, "count"}, {:call, "Inc"}, {:call, "Reset"}]
+             tested: [{:key, "count"}, {:call, "Inc"}, {:call, "Reset"}, {:var, "count"}]
            }
   end
 
@@ -201,7 +201,7 @@ defmodule AshQuint.SensitivityTest do
       with_ticks(inc(2, 1), 1)
     ]
 
-    assert %{survived: [], untested: [{:call, "Tick"}], tested: tested} =
+    assert %{survived: [], untested: [{:call, "Tick"}, {:var, "ticks"}], tested: tested} =
              check(TickAdapter, [states])
 
     assert {:key, "count"} in tested
@@ -219,8 +219,8 @@ defmodule AshQuint.SensitivityTest do
     assert check(ExtraExpectedAdapter, [states]) == %{
              never_overlap: [],
              survived: [],
-             untested: [{:call, "Tick"}],
-             tested: [{:key, "count"}, {:call, "Inc"}]
+             untested: [{:call, "Tick"}, {:var, "ticks"}],
+             tested: [{:key, "count"}, {:call, "Inc"}, {:var, "count"}]
            }
   end
 
@@ -234,7 +234,7 @@ defmodule AshQuint.SensitivityTest do
              never_overlap: [],
              survived: [{:perturb, "random t", 2, "count"}, {:drop, "random t", 2, "Inc"}],
              untested: [],
-             tested: [{:key, "count"}, {:call, "Inc"}]
+             tested: [{:key, "count"}, {:call, "Inc"}, {:var, "count"}]
            }
   end
 
@@ -245,9 +245,60 @@ defmodule AshQuint.SensitivityTest do
     assert check(ToyAdapterCounts, [states]) == %{
              never_overlap: [],
              survived: [],
-             untested: [],
-             tested: [{:key, "counts"}, {:call, "Inc"}, {:call, "Reset"}]
+             untested: [{:var, "count"}],
+             tested: [
+               {:key, "counts"},
+               {:call, "Inc"},
+               {:call, "Reset"},
+               {:var, "counts"}
+             ]
            }
+  end
+
+  test "a model variable no projection covers is untested" do
+    states = [
+      with_ticks(init(), 0),
+      with_ticks(inc(1, 1), 0),
+      tick(1, 1),
+      with_ticks(inc(2, 1), 1)
+    ]
+
+    assert %{untested: [{:call, "Tick"}, {:var, "ticks"}], tested: tested} =
+             check(TickAdapter, [states])
+
+    assert {:var, "count"} in tested
+  end
+
+  test "the action and result roots are not model variables" do
+    states = [init(), inc(1, 1), reset()]
+    %{untested: untested, tested: tested} = check(ToyAdapter, [states])
+    targets = untested ++ tested
+
+    refute {:var, "lastAction"} in targets
+    refute {:var, "lastResult"} in targets
+
+    renamed =
+      Enum.map(states, fn state ->
+        {action, state} = Map.pop(state, "lastAction")
+        Map.put(state, "act", action)
+      end)
+
+    assert %{untested: untested, tested: tested} =
+             Sensitivity.check(ToyAdapter, [trace(renamed)],
+               model: :counter,
+               action_path: ["act"]
+             )
+
+    refute {:var, "act"} in (untested ++ tested)
+    assert {:var, "count"} in tested
+  end
+
+  test "projected keys that aren't model variables are ignored" do
+    %{untested: untested, tested: tested} =
+      check(ToyAdapterLimit, [[init(), inc(1, 1), reset()]])
+
+    refute Enum.any?(untested ++ tested, &match?({:var, "limit"}, &1))
+    assert {:var, "count"} in tested
   end
 
   test "constant key is untested" do
@@ -259,8 +310,11 @@ defmodule AshQuint.SensitivityTest do
   test "rejected first call is not chosen for drop" do
     states = [init(), inc(0, 5, {:rejected, "too_big"}), inc(1, 1)]
 
-    assert %{survived: [], untested: [], tested: [{:key, "count"}, {:call, "Inc"}]} =
-             check(ToyAdapter, [states])
+    assert %{
+             survived: [],
+             untested: [],
+             tested: [{:key, "count"}, {:call, "Inc"}, {:var, "count"}]
+           } = check(ToyAdapter, [states])
   end
 
   test "a later trace supplies the mutant when the first changes nothing" do
@@ -277,7 +331,7 @@ defmodule AshQuint.SensitivityTest do
              never_overlap: [],
              survived: [{:drop, "random t", 2, "Reset"}],
              untested: [],
-             tested: [{:key, "count"}, {:call, "Inc"}, {:call, "Reset"}]
+             tested: [{:key, "count"}, {:call, "Inc"}, {:call, "Reset"}, {:var, "count"}]
            }
   end
 
@@ -288,7 +342,7 @@ defmodule AshQuint.SensitivityTest do
              never_overlap: [],
              survived: [],
              untested: [],
-             tested: [{:key, "count"}, {:call, "Commit"}]
+             tested: [{:key, "count"}, {:call, "Commit"}, {:var, "count"}]
            }
   end
 
@@ -320,9 +374,17 @@ defmodule AshQuint.SensitivityTest do
                adapter_opts: [open: open]
              )
 
-    assert length(tested) == 4
+    assert tested == [
+             {:key, "count"},
+             {:call, "Commit"},
+             {:call, "Inc"},
+             {:call, "Reset"},
+             {:var, "count"}
+           ]
+
     assert :counters.get(open, 1) == 0
-    assert :counters.get(open, 2) == length(traces) + length(tested)
+    # One finish per clean replay and per mutant (every target but the var).
+    assert :counters.get(open, 2) == length(traces) + 4
   end
 
   test "failing clean replay is refused" do
@@ -352,5 +414,10 @@ defmodule AshQuint.SensitivityTest do
              key "limit" never changes in any trace
              no step of Peek changes the state\
              """
+  end
+
+  test "format names the variable" do
+    result = %{survived: [], untested: [{:var, "inflight"}], never_overlap: []}
+    assert Sensitivity.format(result) == ~s(variable "inflight" is never projected)
   end
 end

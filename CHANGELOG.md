@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Breaking:** the sensitivity check reports model variables that no
+  projection covers (`variable "inflight" is never projected`, target
+  `{:var, name}`): the traces' variables, without the action and result
+  roots, that are never a key of the replay's expected values. A suite
+  whose model has a variable the adapter doesn't project (in-flight
+  bookkeeping, model-only state) now fails its sensitivity test. Project
+  the variable, or allow-list it with `vars:`:
+  `sensitivity: [allow_untested: [vars: ~w(inflight finished)]]`. A
+  `vars:` entry that is projected, or isn't a model variable, fails the
+  test like other stale entries.
 - A long mismatch on a projected key whose values are both maps (or both
   `MapSet`s) lists only the differing entries, with their key paths
   (`"c4" > "limit": expected 3, actual 5`), instead of both values whole.

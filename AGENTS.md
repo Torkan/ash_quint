@@ -47,8 +47,9 @@ mix test.check_migrations
   registers op tasks. `AshQuint.Gate.Telemetry` — telemetry gates scoped to
   a replay, compiled only when `:telemetry` is loaded (optional dep).
 - `AshQuint.Sensitivity` — mutants (perturbed key, dropped call or op
-  start/completion, serialized op) and untested keys, actions and
-  interleavings; `overlaps/1` over a replay report.
+  start/completion, serialized op) and untested keys, actions,
+  interleavings and unprojected model variables; `overlaps/1` over a
+  replay report.
 - `AshQuint.Config`, `AshQuint.Manifest`, `AshQuint.Gen`,
   `Mix.Tasks.AshQuint.Gen` — `ash_quint.exs`, the manifest and
   `mix ash_quint.gen`.

@@ -132,7 +132,8 @@ type Result = Accepted | Rejected(str) | Pending
 - **The completing step's `lastResult`** is the outcome of the call it
   completes. One call completes per step, so one `lastResult` is enough.
 - **In-flight bookkeeping is ordinary model state** (`inflight: str -> int`).
-  The adapter doesn't project it.
+  The adapter doesn't project it, and the sensitivity check allow-lists it
+  (`vars:`, see "Sensitivity").
 - **Model what the system visibly shows.** The replay compares every
   step's state, starts included, while calls are in flight, so uncommitted
   writes don't belong in projected variables. An invariant that holds only
@@ -583,7 +584,7 @@ defmodule MyApp.RaceConcurrentTraceTest do
     model: :race,
     adapter: MyApp.RaceTrace,
     traces: :concurrent,
-    sensitivity: true,
+    sensitivity: [allow_untested: [vars: ~w(inflight finished)]],
     replay: [settle_timeout: 1_000]
 end
 ```
@@ -694,6 +695,12 @@ fail:
   projection is blind to it. Some overlaps don't matter, so the next
   overlapping trace is tried until one detects it.
 
+A model variable that no projection covers is untested too: the check
+compares the traces' variables (all but `lastAction` and `lastResult`, or
+the roots of `action_path` and `result_path`) with the keys the replay
+compared, so a variable the adapter forgot to project shows up. Keys the
+adapter projects under names that aren't model variables aren't checked.
+
 The test fails when a mutant survives, and when something is untested:
 
 ```
@@ -704,6 +711,7 @@ key "plans" never changes in any trace
 no step of Refresh changes the state
 serializing IncStart is never detected
 IncStart never overlaps another op in any trace
+variable "plans_seen" is never projected
 ```
 
 An untested key or action usually means a coverage gap: a path no random
@@ -724,9 +732,19 @@ overlap, is allow-listed with `interleavings:`
 scenario that overlaps its ops, or a gate in the race window, would test
 it.
 
+A model variable the adapter deliberately doesn't project, such as
+in-flight bookkeeping or model-only state, is allow-listed with `vars:`.
+The race example's `inflight` and `finished` say which ops are in flight
+and which have completed; the system has no such state:
+
+```elixir
+sensitivity: [allow_untested: [vars: ~w(inflight finished)]]
+```
+
 `sensitivity: true` is `[allow_untested: []]`. An allow-listed key,
-action or interleaving that turns out to be tested, or that the check doesn't know, also
-fails the test, so the list can't go stale. Actions that only ever return
+action, interleaving or variable that turns out to be tested (a variable:
+projected), or that the check doesn't know, also fails the test, so the
+list can't go stale. Actions that only ever return
 `{:skip, …}` make no system call and are never checked (the counter's
 `Peek`). The `sensitivity:` value must be a literal: the lists can be
 written as `~w(plans)`, but not as module attributes or variables.
@@ -838,7 +856,7 @@ defmodule MyApp.RaceConcurrentTraceTest do
     model: :race,
     adapter: MyApp.RacePgTrace,
     traces: :concurrent,
-    sensitivity: true
+    sensitivity: [allow_untested: [vars: ~w(inflight finished)]]
 
   setup do
     Ecto.Adapters.SQL.Sandbox.mode(MyApp.Repo, :auto)

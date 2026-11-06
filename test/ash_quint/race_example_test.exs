@@ -9,7 +9,7 @@ defmodule AshQuint.RaceExampleTest do
   use AshQuint.Case,
     model: :race,
     adapter: AshQuint.Test.RaceAdapter,
-    sensitivity: true
+    sensitivity: [allow_untested: [vars: ~w(inflight finished)]]
 
   alias AshQuint.{Config, Manifest, Replay, Step, Trace}
   alias AshQuint.Test.RaceAdapter
@@ -117,7 +117,13 @@ defmodule AshQuint.RaceExampleTest do
         op_field: model().op_field
       )
 
-    assert %{survived: [], untested: [], never_overlap: []} = result
+    # The in-flight bookkeeping is model-only.
+    assert %{
+             survived: [],
+             untested: [{:var, "finished"}, {:var, "inflight"}],
+             never_overlap: []
+           } = result
+
     assert {:interleaving, "IncStart"} in result.tested
   end
 

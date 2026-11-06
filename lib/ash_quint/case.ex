@@ -82,8 +82,11 @@ defmodule AshQuint.Case do
       at compile time, so module attributes and variables aren't allowed.
       `true` is `[allow_untested: []]`. Default `false`. `interleavings:`
       lists start actions whose serialization may go undetected, or whose
-      ops never overlap (`[allow_untested: [interleavings: ["IncStart"]]]`);
-      see `AshQuint.Sensitivity`.
+      ops never overlap (`[allow_untested: [interleavings: ["IncStart"]]]`).
+      `vars:` lists model variables the projection deliberately leaves out,
+      such as in-flight bookkeeping
+      (`[allow_untested: [vars: ~w(inflight finished)]]`); see
+      `AshQuint.Sensitivity`.
     * `:traces` — which of the manifest's traces get a test and go into
       the sensitivity check: `:all`, `:sequential` (those the manifest
       doesn't mark concurrent) or `:concurrent`. A selection with no trace
@@ -250,11 +253,14 @@ defmodule AshQuint.Case do
       {:interleavings, actions} ->
         Enum.map(strings!(actions, "interleavings", env), &{:interleaving, &1})
 
+      {:vars, vars} ->
+        Enum.map(strings!(vars, "vars", env), &{:var, &1})
+
       {key, _value} when is_atom(key) ->
         compile_error!(
           env,
           "unknown allow_untested option #{inspect(key)}; " <>
-            "expected keys, actions or interleavings"
+            "expected keys, actions, interleavings or vars"
         )
 
       _other ->
@@ -268,7 +274,7 @@ defmodule AshQuint.Case do
   defp allow_untested_error!(other, env) do
     compile_error!(
       env,
-      "allow_untested must be a keyword list of keys, actions and interleavings, " <>
+      "allow_untested must be a keyword list of keys, actions, interleavings and vars, " <>
         "got #{Macro.to_string(other)}"
     )
   end
@@ -507,13 +513,16 @@ defmodule AshQuint.Case do
   defp describe({:key, key}), do: "key #{inspect(key)}"
   defp describe({:call, action}), do: "action #{inspect(action)}"
   defp describe({:interleaving, action}), do: "interleaving #{inspect(action)}"
+  defp describe({:var, var}), do: "variable #{inspect(var)}"
 
   defp stale_reason(target, result) do
     case {target in result.tested, target} do
+      {true, {:var, _var}} -> "is projected"
       {true, _target} -> "is tested"
       {false, {:key, _key}} -> "isn't in any projection"
       {false, {:call, _action}} -> "makes no system call in any trace"
       {false, {:interleaving, _action}} -> "starts no op in any trace"
+      {false, {:var, _var}} -> "isn't a model variable"
     end
   end
 

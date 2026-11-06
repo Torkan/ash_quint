@@ -42,6 +42,15 @@ defmodule AshQuint.Sensitivity do
   untested too (`{:interleaving, action}`): some overlaps legitimately
   don't matter, so these can be allow-listed like keys and actions.
 
+  A model variable that no projection covers is untested as well
+  (`{:var, name}`): one of the traces' variables (`AshQuint.Trace`'s
+  `vars`), other than the roots of `:action_path` and `:result_path`, that
+  is never a key of a clean replay's expected values. It is tested when the
+  projection has it as a key. In-flight bookkeeping (a model's set of
+  pending ops, say) and model-only state are what an adapter doesn't
+  project, so they are allow-listed. Keys an adapter projects under names
+  that aren't model variables are not checked.
+
   Every mutant replays with a fresh `init/2`, so fresh `AshQuint.Names`, in
   the caller's process and sandbox, one after another. The adapter's
   `project/1` must therefore be scoped to its own trace (see
@@ -59,7 +68,8 @@ defmodule AshQuint.Sensitivity do
           | {:drop, trace :: String.t(), index :: pos_integer(), action :: String.t()}
           | {:serialize, trace :: String.t(), index :: pos_integer(), action :: String.t()}
 
-  @type target :: {:key, term()} | {:call, String.t()} | {:interleaving, String.t()}
+  @type target ::
+          {:key, term()} | {:call, String.t()} | {:interleaving, String.t()} | {:var, String.t()}
 
   @type result :: %{
           survived: [mutant()],
@@ -72,13 +82,15 @@ defmodule AshQuint.Sensitivity do
   Replays `traces` and their mutants through `adapter`.
 
   `opts` are `AshQuint.Replay.run/3`'s, without `:mutate`. Returns the
-  mutants that survived, the keys, calls and interleavings that are
-  untested, and the ones that had a mutant (`tested`; an interleaving only
-  when a serialization was detected). `never_overlap` lists the actions
+  mutants that survived, the keys, calls, interleavings and model
+  variables that are untested, and the ones that had a mutant (`tested`;
+  an interleaving only when a serialization was detected, a variable when
+  the projection covers it). `never_overlap` lists the actions
   whose ops never overlap another op in any trace: their interleaving is
   untested because there is no serialization to try. A mutant's trace is
   named `"<source> <name>"`. Targets are listed keys first, then calls,
-  then interleavings, each sorted; survivors in the same order.
+  then interleavings, then variables, each sorted; survivors in the same
+  order.
 
   Raises `ArgumentError` when a clean replay fails.
   """
@@ -106,14 +118,18 @@ defmodule AshQuint.Sensitivity do
 
     interleavings = interleavings(adapter, reports, opts)
 
+    {projected_vars, unprojected_vars} = vars(reports, opts)
+
     untested =
       Enum.map(Enum.sort(perturbs.unchanged), &{:key, &1}) ++
         Enum.map(Enum.sort(drops.unchanged), &{:call, &1}) ++
-        for({action, false} <- interleavings, do: {:interleaving, action})
+        for({action, false} <- interleavings, do: {:interleaving, action}) ++
+        Enum.map(unprojected_vars, &{:var, &1})
 
     tested =
       Enum.map(mutants, &elem(&1, 0)) ++
-        for {action, true} <- interleavings, do: {:interleaving, action}
+        for({action, true} <- interleavings, do: {:interleaving, action}) ++
+        Enum.map(projected_vars, &{:var, &1})
 
     never_overlap =
       for {action, false} <- interleavings,
@@ -121,6 +137,28 @@ defmodule AshQuint.Sensitivity do
           do: action
 
     %{survived: survived, untested: untested, tested: tested, never_overlap: never_overlap}
+  end
+
+  # The traces' model variables (without the action and result roots),
+  # sorted and split by whether some clean report's expected values have
+  # them as a key, that is, whether the projection covers them.
+  defp vars(reports, opts) do
+    roots = [
+      hd(Keyword.get(opts, :action_path, ["lastAction"])),
+      hd(Keyword.get(opts, :result_path, ["lastResult"]))
+    ]
+
+    model_vars =
+      for({trace, _report} <- reports, var <- trace.vars, uniq: true, do: var) -- roots
+
+    projected =
+      for {_trace, report} <- reports,
+          expected <- [report.initial_expected | Enum.map(report.synced, & &1.expected)],
+          key <- Map.keys(expected),
+          into: MapSet.new(),
+          do: key
+
+    model_vars |> Enum.sort() |> Enum.split_with(&MapSet.member?(projected, &1))
   end
 
   # For each action that starts ops, sorted: whether serializing one of its
@@ -180,6 +218,7 @@ defmodule AshQuint.Sensitivity do
 
   defp line({:key, key}), do: "key #{inspect(key)} never changes in any trace"
   defp line({:call, action}), do: "no step of #{action} changes the state"
+  defp line({:var, var}), do: "variable #{inspect(var)} is never projected"
 
   @doc """
   Which ops of a replay overlap another op, from its `report`.

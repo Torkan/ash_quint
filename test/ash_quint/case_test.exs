@@ -242,19 +242,65 @@ defmodule AshQuint.CaseTest do
   end
 
   test "allow_untested silences listed actions" do
-    allowed = ~s([allow_untested: [keys: ["limit"], actions: ["Inc", "Reset"]]])
+    allowed = ~s([allow_untested: [keys: ["limit"], actions: ["Inc", "Reset"], vars: ["count"]]])
     assert run_test(compile_sensitivity(ToyAdapterConstant, allowed), "sensitivity of ok") == :ok
 
     assert sensitivity_failure(
              ToyAdapterConstant,
-             ~s([allow_untested: [keys: ["limit"], actions: ["Inc"]]])
+             ~s([allow_untested: [keys: ["limit"], actions: ["Inc"], vars: ["count"]]])
            ) == "sensitivity of :ok:\nno step of Reset changes the state"
+  end
+
+  test "allow_untested silences listed variables" do
+    allowed = ~s([allow_untested: [keys: ["limit"], actions: ["Inc", "Reset"], vars: ["count"]]])
+    assert run_test(compile_sensitivity(ToyAdapterConstant, allowed), "sensitivity of ok") == :ok
+  end
+
+  test "an unprojected variable fails the sensitivity test" do
+    message =
+      sensitivity_failure(
+        ToyAdapterConstant,
+        ~s([allow_untested: [keys: ["limit"], actions: ["Inc", "Reset"]]])
+      )
+
+    assert message == "sensitivity of :ok:\nvariable \"count\" is never projected"
+  end
+
+  test "stale vars entries fail" do
+    assert sensitivity_failure(ToyAdapter, ~s([allow_untested: [vars: ["count"]]])) ==
+             """
+             sensitivity of :ok:
+             variable "count" is allowed untested but is projected; \
+             remove it from allow_untested\
+             """
+
+    assert sensitivity_failure(ToyAdapter, ~s([allow_untested: [vars: ["nope"]]])) ==
+             """
+             sensitivity of :ok:
+             variable "nope" is allowed untested but isn't a model variable; \
+             remove it from allow_untested\
+             """
+  end
+
+  test "vars accepts ~w sigils" do
+    allowed = "[allow_untested: [keys: ~w(limit), actions: ~w(Inc Reset), vars: ~w(count)]]"
+    assert run_test(compile_sensitivity(ToyAdapterConstant, allowed), "sensitivity of ok") == :ok
+  end
+
+  test "vars must be strings" do
+    error =
+      assert_raise CompileError, fn ->
+        compile_sensitivity(ToyAdapter, "[allow_untested: [vars: [:count]]]")
+      end
+
+    assert error.description ==
+             "allow_untested vars must be a literal list of strings or a ~w sigil, got [:count]"
   end
 
   test "allow_untested accepts ~w and ~W sigils" do
     for allowed <- [
-          "[allow_untested: [keys: ~w(limit), actions: ~w(Inc Reset)]]",
-          "[allow_untested: [keys: ~W(limit), actions: ~W(Inc Reset)s]]"
+          "[allow_untested: [keys: ~w(limit), actions: ~w(Inc Reset), vars: ~w(count)]]",
+          "[allow_untested: [keys: ~W(limit), actions: ~W(Inc Reset)s, vars: ~W(count)]]"
         ] do
       mod = compile_sensitivity(ToyAdapterConstant, allowed)
       assert run_test(mod, "sensitivity of ok") == :ok
@@ -300,7 +346,7 @@ defmodule AshQuint.CaseTest do
     for {source, description} <- [
           {"[allow: []]", "unknown sensitivity option :allow; expected allow_untested"},
           {"[allow_untested: [key: []]]",
-           "unknown allow_untested option :key; expected keys, actions or interleavings"},
+           "unknown allow_untested option :key; expected keys, actions, interleavings or vars"},
           {"[allow_untested: [keys: [:count]]]",
            "allow_untested keys must be a literal list of strings or a ~w sigil, got [:count]"},
           {"[allow_untested: [actions: \"Peek\"]]",
@@ -315,7 +361,8 @@ defmodule AshQuint.CaseTest do
           {"[allow_untested: [keys: @keys]]",
            "allow_untested keys must be a literal list of strings or a ~w sigil, got @keys"},
           {"[allow_untested: :all]",
-           "allow_untested must be a keyword list of keys, actions and interleavings, got :all"},
+           "allow_untested must be a keyword list of keys, actions, interleavings and vars, " <>
+             "got :all"},
           {"[1]",
            "sensitivity must be true, false or [allow_untested: [keys: [...], actions: [...]]], " <>
              "got [1]"},

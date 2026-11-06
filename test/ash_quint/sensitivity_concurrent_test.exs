@@ -178,6 +178,7 @@ defmodule AshQuint.SensitivityConcurrentTest do
                check(ConcurrentToyAdapter, [first_completes_first()])
 
       assert {:interleaving, "IncStart"} in tested
+      assert {:var, "count"} in tested
     end
 
     test "toy adapter whose projection is blind until completion (ConcurrentToyAdapterBlind) reports serializing IncStart is never detected" do
