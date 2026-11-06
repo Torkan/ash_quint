@@ -70,6 +70,10 @@ mix test.check_migrations
   table of the committed manifests, `mix ash_quint.coverage` (also printed
   by `mix ash_quint.gen` after writing).
 - `AshQuint.Case` — compile-time test generation.
+- `AshQuint.Scaffold`, `Mix.Tasks.AshQuint.Gen.Adapter` — the adapter
+  skeleton and test module source from a manifest's interface,
+  `mix ash_quint.gen.adapter` (writes `test/support/<model>_trace.ex` and
+  `test/<model>_trace_test.exs`).
 - `AshQuint.Explore`, `Mix.Tasks.AshQuint.Explore` — explore sessions
   (fresh `quint run` traces replayed, failures written as candidates under
   `_build/<env>/ash_quint/explore/`), the `explore:` test and

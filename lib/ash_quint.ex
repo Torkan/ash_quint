@@ -36,5 +36,8 @@ defmodule AshQuint do
     * `mix ash_quint.coverage` (`Mix.Tasks.AshQuint.Coverage`) and
       `AshQuint.Coverage` — which outcomes each action reaches in the
       committed traces.
+    * `mix ash_quint.gen.adapter` (`Mix.Tasks.AshQuint.Gen.Adapter`) and
+      `AshQuint.Scaffold` — an adapter skeleton and its test module, from
+      the model interface in the manifest.
   """
 end

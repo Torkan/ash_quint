@@ -49,7 +49,8 @@ def cli do
     preferred_envs: [
       "ash_quint.gen": :test,
       "ash_quint.explore": :test,
-      "ash_quint.promote": :test
+      "ash_quint.promote": :test,
+      "ash_quint.gen.adapter": :test
     ]
   ]
 end
@@ -419,7 +420,41 @@ mix ash_quint.gen <model> to record the model's actions)`.
 
 ## Writing an adapter
 
-An adapter implements `AshQuint.Adapter` for one model. The counter's:
+An adapter implements `AshQuint.Adapter` for one model. Start from the
+scaffold that `mix ash_quint.gen.adapter` writes from the model interface
+in the manifest (no Quint run):
+
+```sh
+MIX_ENV=test mix ash_quint.gen.adapter counter [--adapter MyApp.CounterTrace] [--force]
+```
+
+It writes `test/support/counter_trace.ex` (module `<App>.CounterTrace`, or
+`--adapter`) and `test/counter_trace_test.exs` (`<adapter>Test`, with
+`use AshQuint.Case, model: :counter, adapter: …, sensitivity: true`, and
+comments on `traces:` and `explore:`), asking before it overwrites a file
+unless given `--force`. The adapter has a `step/2` clause per action
+except `init_action`, binding the action's picks, and a `project/1` with
+every model variable, its type as a comment; each body is a `todo!/1`
+that raises `<adapter>: <what> is not implemented yet`, so the files
+compile without warnings and every replay fails at its first step until
+you fill them in:
+
+```elixir
+# Inc({ ctr: str, by: int })
+@impl true
+def step(ctx, %Step{action_taken: "Inc", nondet_picks: %{"ctr" => ctr, "by" => by}}) do
+  {:ok, todo!("Inc(ctr: #{inspect(ctr)}, by: #{inspect(by)})"), ctx}
+end
+```
+
+For a concurrent model, the manifest's outcomes pick the form: an action
+whose steps are all `Pending` gets `{:start, op, fn -> … end, ctx}`, one
+with other outcomes `{:complete, op, ctx}`. Drop the variables that are
+the model's bookkeeping from `project/1` and allow-list them with
+`sensitivity: [allow_untested: [vars: […]]]`. A manifest older than
+format 3 has no interface: regenerate it with `mix ash_quint.gen` first.
+
+The counter's adapter, filled in:
 
 ```elixir
 defmodule MyApp.CounterTrace do

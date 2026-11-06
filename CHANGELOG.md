@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Adapter scaffold: `mix ash_quint.gen.adapter <model> [--adapter Module]
+  [--force]` writes `test/support/<model>_trace.ex`, an adapter with a
+  `step/2` clause per action binding its picks (`{:start, …}` and
+  `{:complete, …}` for concurrent actions, from the manifest's outcomes),
+  `project/1` with every model variable and a `todo!/1` that raises
+  `<adapter>: <what> is not implemented yet`, and
+  `test/<model>_trace_test.exs`, its `AshQuint.Case` test module with
+  `sensitivity: true`. It reads the model interface from a format 3
+  manifest; `AshQuint.Scaffold` renders both files.
 - Exploring: `use AshQuint.Case, explore: true` (or
   `[max_steps: …, batch: …]`) defines an `"explore <model>"` test, tagged
   `quint_explore: <model>`, that replays fresh `quint run` traces of the
