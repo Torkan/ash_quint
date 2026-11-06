@@ -44,6 +44,15 @@ defmodule AshQuint.Explore do
   `<build>/ash_quint/explore/<model>/regression_<seed>_<index>.itf.json`,
   from where `mix ash_quint.promote` commits it.
 
+  With `shrink:` set for the model, a candidate confirmed this way is
+  shrunk first (`AshQuint.Shrink.shrink/3`, with the interface of the
+  committed manifest, read once per session, and work directories under
+  `<build>/ash_quint/shrink/`); a reduction must stay in the `traces:`
+  selection. A shrunk candidate is written instead of the confirmed one,
+  with `shrunk` (`rounds`, `run`, `steps`) added to its provenance, and its
+  confirmation replay's message becomes the failure's. A candidate that
+  can't be shrunk is written as confirmed, with the reason in the report.
+
   The session stops when `runs` traces are generated, `failures` failures
   are found, the budget is spent (checked before each batch but the
   first), Quint fails, or a fresh trace can't be normalized, decoded or
@@ -57,6 +66,7 @@ defmodule AshQuint.Explore do
   alias AshQuint.ITF
   alias AshQuint.Manifest
   alias AshQuint.Replay
+  alias AshQuint.Shrink
 
   @type option ::
           {:model, atom()}
@@ -82,7 +92,20 @@ defmodule AshQuint.Explore do
           candidate: Path.t(),
           cut_at: non_neg_integer() | nil,
           reproduced: boolean() | nil,
-          quint: String.t() | nil
+          quint: String.t() | nil,
+          shrunk: shrunk() | {:not_shrunk, String.t()} | nil
+        }
+
+  @typedoc """
+  A shrunk candidate: the steps of the confirmed candidate (`from`), its
+  own steps, the shrink rounds and its run expression (see
+  `AshQuint.Shrink.shrink/3`).
+  """
+  @type shrunk :: %{
+          from: non_neg_integer(),
+          steps: non_neg_integer(),
+          rounds: non_neg_integer(),
+          run: String.t()
         }
 
   @type report :: %{
@@ -174,9 +197,11 @@ defmodule AshQuint.Explore do
       max_steps: Keyword.get(opts, :max_steps) || model.random[:max_steps],
       witnesses: witness_names(model),
       replay_opts: replay_opts(model, opts),
+      interface: interface(config, model),
       model_hash: Manifest.hash_file(Path.join(config.root, model.model)),
       runner: Keyword.get(run_opts, :runner, &default_runner/3),
       out: Path.join([build_dir(run_opts), "ash_quint", "explore", to_string(model.name)]),
+      shrink_dir: Path.join([build_dir(run_opts), "ash_quint", "shrink"]),
       tmp_dir: Keyword.get_lazy(run_opts, :tmp_dir, &System.tmp_dir!/0),
       now: now,
       start: now.()
@@ -203,6 +228,17 @@ defmodule AshQuint.Explore do
     if witnesses && witnesses[:main] == random[:main],
       do: witnesses[:names] || [],
       else: []
+  end
+
+  # The model interface shrinking needs, read once per session; nil without
+  # shrink:.
+  defp interface(_config, %Model{shrink: nil}), do: nil
+
+  defp interface(config, model) do
+    case Manifest.load(config, model, need: :interface) do
+      {:ok, manifest} -> {:ok, manifest.interface}
+      {:error, message} -> {:error, message}
+    end
   end
 
   defp build_dir(run_opts), do: Keyword.get_lazy(run_opts, :build_dir, &Mix.Project.build_path/0)
@@ -357,18 +393,52 @@ defmodule AshQuint.Explore do
       :ok ->
         report
 
-      {:failed, failure_index, message} ->
+      {:failed, failure_index, action, message} ->
         {candidate, cut_at, reproduced} =
           confirm(session, binary, trace.name, seed, failure_index)
 
-        failure = failure(session, origin, binary, candidate, message, cut_at)
-        %{report | failures: [Map.put(failure, :reproduced, reproduced) | report.failures]}
+        shrunk = if reproduced, do: shrink(session, candidate, action, trace, index)
+
+        failure =
+          failure(session, origin, binary, {candidate, message, cut_at, reproduced}, shrunk)
+
+        %{report | failures: [failure | report.failures]}
 
       {:raised, banner} ->
         message = "#{session.model.name} regression #{seed}_#{index}: #{banner}"
-        failure = failure(session, origin, binary, binary, message, nil)
-        %{report | failures: [Map.put(failure, :reproduced, nil) | report.failures]}
+        failure = failure(session, origin, binary, {binary, message, nil, nil}, nil)
+        %{report | failures: [failure | report.failures]}
     end
+  end
+
+  # A confirmed candidate shrunk (`{:ok, binary, shrunk}`), or why not; nil
+  # without shrink:.
+  defp shrink(%{interface: nil}, _candidate, _action, _trace, _index), do: nil
+
+  defp shrink(%{interface: {:error, message}}, _candidate, _action, _trace, _index),
+    do: {:not_shrunk, message}
+
+  defp shrink(%{interface: {:ok, interface}} = session, candidate, action, trace, index) do
+    %{name: name, seed: seed} = trace
+
+    Shrink.shrink(candidate, action,
+      config: session.config,
+      model: session.model,
+      interface: interface,
+      runner: session.runner,
+      replay: &replay(session, decode(&1, name, seed)),
+      keep?: &keep?(session, &1, name, seed, index),
+      dir: session.shrink_dir
+    )
+  end
+
+  # A reduction must stay in the selection that found the candidate.
+  defp keep?(%{traces: :all}, _binary, _name, _seed, _index), do: true
+
+  defp keep?(session, binary, name, seed, index) do
+    selected?(session, decode(binary, name, seed), index)
+  rescue
+    _error in [Jason.DecodeError, ITF.Error, ArgumentError] -> false
   end
 
   defp decode(binary, name, seed) do
@@ -386,8 +456,11 @@ defmodule AshQuint.Explore do
 
   defp replay(session, trace) do
     case Replay.run(session.adapter, trace, session.replay_opts) do
-      {:ok, _report} -> :ok
-      {:error, %{index: index, message: message}} -> {:failed, index, message}
+      {:ok, _report} ->
+        :ok
+
+      {:error, %{index: index, action: action, message: message}} ->
+        {:failed, index, action, message}
     end
   catch
     kind, reason -> {:raised, Exception.format_banner(kind, reason, __STACKTRACE__)}
@@ -410,10 +483,15 @@ defmodule AshQuint.Explore do
   end
 
   defp reproduced?(session, binary, name, seed, failure_index) do
-    match?({:failed, ^failure_index, _message}, replay(session, decode(binary, name, seed)))
+    match?(
+      {:failed, ^failure_index, _action, _message},
+      replay(session, decode(binary, name, seed))
+    )
   end
 
-  defp failure(session, {seed, index, args}, full, candidate, message, cut_at) do
+  defp failure(session, {seed, index, args}, full, confirmed, shrunk) do
+    {candidate, message, cut_at, reproduced} = confirmed
+
     provenance = %{
       "model" => to_string(session.model.name),
       "model_hash" => session.model_hash,
@@ -426,6 +504,19 @@ defmodule AshQuint.Explore do
       "cut_at" => cut_at
     }
 
+    {candidate, provenance, message, shrunk} =
+      case shrunk do
+        {:ok, binary, %{steps: steps, rounds: rounds, run: run, message: message}} ->
+          from = length(Jason.decode!(candidate)["states"]) - 1
+          recorded = %{"rounds" => rounds, "run" => run, "steps" => steps}
+
+          {binary, Map.put(provenance, "shrunk", recorded), message,
+           %{from: from, steps: steps, rounds: rounds, run: run}}
+
+        other ->
+          {candidate, provenance, message, other}
+      end
+
     path = Path.join(session.out, Gen.regression_file(seed, index))
     File.mkdir_p!(session.out)
     File.write!(path, Gen.put_provenance(candidate, provenance))
@@ -436,7 +527,9 @@ defmodule AshQuint.Explore do
       message: message,
       candidate: path,
       cut_at: cut_at,
-      quint: Gen.quint_line(session.config, provenance)
+      reproduced: reproduced,
+      quint: Gen.quint_line(session.config, provenance),
+      shrunk: shrunk
     }
   end
 
@@ -487,8 +580,10 @@ defmodule AshQuint.Explore do
   `:unknown`).
   Otherwise a header line counts the failures, followed, each after a
   blank line, by each failure's message, its candidate (relative to the
-  current directory), the `quint run` command that regenerates its trace
-  (`AshQuint.Gen.quint_line/2`) and the `mix ash_quint.promote` command
+  current directory), with shrinking `shrunk from <n> to <m> steps (<k>
+  rounds)` or `not shrunk: <reason>`, the `quint run` command that
+  regenerates its trace (`AshQuint.Gen.quint_line/2`), a shrunk
+  candidate's `run:` expression and the `mix ash_quint.promote` command
   for it, and then the error.
   """
   @spec format(atom(), report()) :: String.t()
@@ -548,9 +643,21 @@ defmodule AshQuint.Explore do
 
     quint = if failure.quint, do: ["quint:     " <> failure.quint], else: []
 
+    {shrunk, run} =
+      case Map.get(failure, :shrunk) do
+        %{from: from, steps: steps, rounds: rounds, run: run} ->
+          {["shrunk from #{from} to #{steps} steps (#{rounds} rounds)"], ["run:       " <> run]}
+
+        {:not_shrunk, reason} ->
+          {["not shrunk: " <> reason], []}
+
+        nil ->
+          {[], []}
+      end
+
     Enum.join(
       ["#{failure.message}", "candidate: #{path} (#{how})"] ++
-        quint ++ ["promote:   MIX_ENV=test mix ash_quint.promote #{path}"],
+        shrunk ++ quint ++ run ++ ["promote:   MIX_ENV=test mix ash_quint.promote #{path}"],
       "\n"
     )
   end

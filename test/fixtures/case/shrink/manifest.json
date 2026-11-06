@@ -1,0 +1,57 @@
+{
+  "ash_quint": 3,
+  "interface": {
+    "actions": [
+      {
+        "name": "Init",
+        "picks": "unit"
+      },
+      {
+        "fields": [
+          {
+            "name": "by",
+            "type": "int"
+          }
+        ],
+        "name": "Inc",
+        "picks": "record"
+      },
+      {
+        "name": "Reset",
+        "picks": "unit"
+      }
+    ],
+    "results": [
+      "Accepted",
+      "Rejected"
+    ],
+    "vars": [
+      {
+        "name": "count",
+        "type": "int"
+      }
+    ]
+  },
+  "models": {
+    "test/fixtures/case/shrink/model.qnt": "sha256:ec058eab6cfc22f3efff8653b64f738eed0f73f2a1d25b16975696c181908093"
+  },
+  "quint": "0.33.1",
+  "seed": 7,
+  "traces": [
+    {
+      "actions": {
+        "Inc": 1
+      },
+      "file": "regression_4031_2.itf.json",
+      "name": "4031_2",
+      "outcomes": {
+        "Inc": {
+          "accepted": 1
+        }
+      },
+      "seed": 4031,
+      "source": "regression",
+      "steps": 1
+    }
+  ]
+}

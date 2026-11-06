@@ -71,7 +71,8 @@ action binding its picks and a `project/1` with every model variable.
 - A failure starts `<model> <source> <name>, step <i> (<action>), seed
   <seed>: `, lists every problem of that step, then `model step:` (the
   model's picks and result), `trace:` and, for a found trace, `quint:`,
-  the command that regenerates it.
+  the command that regenerates it, and for a shrunk one `run:`, its steps
+  as a Quint run.
 - Decide whether the system or the model is wrong before changing either.
   A failure in an explore candidate is a bug to fix, then a trace to
   promote with `mix ash_quint.promote`.

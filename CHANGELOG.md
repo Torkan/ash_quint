@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Shrinking: with `shrink: true` (or `shrink: [apply: "apply", rounds: 20]`)
+  for a model, explore shrinks each confirmed candidate before writing it
+  (`AshQuint.Shrink`). The steps are rebuilt as a Quint run
+  (`init.then(inc("c1", 2)).then(…)`, by convention from the action
+  variants and the model interface of a format 3 manifest, or through a
+  model action named by `apply:`); round 0 checks that the run gives back
+  the candidate's states, then each round removes chunks of the steps
+  before the failing one, runs the reductions in one `quint test` and
+  keeps the first whose replay fails with the same action, until no
+  single step can be removed or after `rounds` rounds (default 20). A
+  shrunk candidate is the kept run's ITF, its provenance gains
+  `shrunk` (`rounds`, `run`, `steps`), and the failure's message is its
+  own replay's. The failure block gains `shrunk from N to M steps (K
+  rounds)` or `not shrunk: <reason>` after the candidate line and
+  `run:       <run>` after `quint:`; the report's failures gain `shrunk`.
+  A promoted shrunk trace's test prints `run:   <run>` after its `quint:`
+  line. The examples' config turns it on for `counter` and `race`. The
+  loop's Quint model is in `models/practices/` (not packaged).
 - Docs: a README section "Modelling practices" (from Quint's write-ups on
   model-based testing, mapped to ash_quint), `backend:` in the README's
   configuration, and usage rules for agents, packaged with the library:

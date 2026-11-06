@@ -106,6 +106,26 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
     assert infos() == ["ash_quint.promote: counter: added regression_4031_2.itf.json (10 steps)"]
   end
 
+  test "a shrunk candidate promotes", %{root: root} do
+    # random_0 shrunk to its first two steps: steps stays the batch trace's.
+    shrunk = %{"rounds" => 3, "run" => "init.then(inc(\"c1\", 1))", "steps" => 2}
+    file = candidate(root, "a.itf.json", %{"shrunk" => shrunk})
+    path = Path.join(root, file)
+    File.write!(path, Gen.cut(File.read!(path), 2))
+
+    promote(root, [file])
+
+    assert File.read!(Path.join(root, @target)) == File.read!(path)
+
+    assert %{name: "4031_2", seed: 4031, steps: 2} =
+             Enum.find(
+               Manifest.read!(Path.join(root, @manifest)).traces,
+               &(&1.source == :regression)
+             )
+
+    assert infos() == ["ash_quint.promote: counter: added regression_4031_2.itf.json (2 steps)"]
+  end
+
   test "promote keeps the manifest's backend", %{root: root} do
     path = Path.join(root, @manifest)
     json = path |> File.read!() |> Jason.decode!() |> Map.put("backend", "rust")

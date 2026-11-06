@@ -36,7 +36,8 @@ defmodule AshQuint do
       the model interface it records.
     * `mix ash_quint.explore` (`Mix.Tasks.AshQuint.Explore`) and
       `AshQuint.Explore` — replay fresh traces and report failures as
-      candidate regression traces; `mix ash_quint.promote`
+      candidate regression traces, shrunk with `shrink:`
+      (`AshQuint.Shrink`); `mix ash_quint.promote`
       (`Mix.Tasks.AshQuint.Promote`) commits them.
     * `mix ash_quint.coverage` (`Mix.Tasks.AshQuint.Coverage`) and
       `AshQuint.Coverage` — which outcomes each action reaches in the

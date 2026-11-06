@@ -35,6 +35,16 @@ mix test --only postgres                   # needs Postgres; see "Postgres"
 mix test.check_migrations
 ```
 
+When `AshQuint.Shrink.Loop` or `models/practices/` change (needs Node; `$Q`
+as in "Quint"):
+
+```sh
+$Q typecheck models/practices/model.qnt
+$Q test models/practices/model-tests.qnt --main=tests --match='Test$'   # 4 passing
+$Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10000 --seed=1 \
+  --invariants keptValid keptFails keptOrdered chunkBounded doneMinimal roundsBounded
+```
+
 ## Module map
 
 - `AshQuint` (`lib/ash_quint.ex`) — overview; the README is the user guide.
@@ -87,12 +97,23 @@ mix test.check_migrations
   (fresh `quint run` traces replayed, failures written as candidates under
   `_build/<env>/ash_quint/explore/`), the `explore:` test and
   `mix ash_quint.explore`.
+- `AshQuint.Shrink` — shrinking explore candidates (`shrink:`): rendering
+  ITF values as Quint, a trace's steps as calls, the wrapper module and
+  the driver `shrink/3` (round 0, the rounds through `quint test`, the
+  final confirmation); `AshQuint.Shrink.Loop` (internal) — the loop's
+  state machine, mapped 1:1 to `models/practices/model.qnt` (its
+  `quint_cli` test replays the model's traces against it).
+- `models/practices/` — the shrink loop's Quint model and its tests (a
+  spec artefact, not an example; not packaged, not in `ash_quint.exs`;
+  mirrored in Redline `ash_quint/practices/model`). Its commands are in
+  "Gates".
 - `AshQuint.Ash`, `AshQuint.Ash.Gate` — Ash helpers (outcomes, snapshots,
   tracer context transfer, `pg_backend_pid/1`, `pg_blocked?/2`) and the
   gate change, compiled only when Ash is loaded; no other module in `lib/`
   may call Ash (`core_has_no_ash_test`, which skips every `AshQuint.Ash.*`).
 - `priv/examples/counter/` — the example model and its committed traces
-  (configured in the root `ash_quint.exs`, which isn't packaged).
+  (configured in the root `ash_quint.exs`, which isn't packaged; both
+  examples have `shrink: true`).
   Regenerate with `MIX_ENV=test mix ash_quint.gen counter`.
 - `priv/examples/race/` — the concurrency example (start/complete actions
   over op ids, `Pending` results) and its committed traces, configured in

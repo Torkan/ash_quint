@@ -17,7 +17,9 @@
         max_steps: 10,
         max_samples: 10_000
       ],
-      scenarios: [main: "tests", match: "Test$"]
+      scenarios: [main: "tests", match: "Test$"],
+      # Explore shrinks its candidates (mix ash_quint.explore).
+      shrink: true
     ],
     # Two concurrent Incs against a limit: see the README's model convention.
     race: [
@@ -27,7 +29,8 @@
       seed: 20_261_104,
       random: [main: "race", n_traces: 4, max_steps: 10, max_samples: 20],
       witnesses: [main: "race", names: ~w(witOverlap), max_steps: 10, max_samples: 10_000],
-      scenarios: [main: "tests", match: "Test$"]
+      scenarios: [main: "tests", match: "Test$"],
+      shrink: true
     ]
   ]
 ]

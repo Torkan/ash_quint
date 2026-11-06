@@ -106,6 +106,17 @@ defmodule AshQuint.CaseTest do
              ]
     end
 
+    test "a shrunk regression prints its run" do
+      assert Enum.take(failure_lines(failing(:shrink), "regression 4031_2"), -4) == [
+               ~s(model step: Inc %{"by" => 1}, result :accepted),
+               "trace: test/fixtures/case/shrink/regression_4031_2.itf.json",
+               "quint: npx --yes @informalsystems/quint@0.33.1 run " <>
+                 "test/fixtures/case/shrink/model.qnt --main=toy --seed=4031 " <>
+                 "--out-itf=explore_{seq}.itf.json (trace 2)",
+               "run:   init.then(inc(1))"
+             ]
+    end
+
     test "a scenario trace has no quint line" do
       assert Enum.take(failure_lines(failing(:promoted), "scenario incTest"), -2) == [
                ~s(model step: Inc %{"by" => 2}, result :accepted),

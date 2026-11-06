@@ -25,7 +25,9 @@ defmodule AshQuint.Case do
       seed it was found with; see `mix ash_quint.promote`). Its failure
       message ends with `trace: <path>`, the trace file from the project
       root, and, for a regression trace with provenance, `quint: <command>`,
-      the `quint run` that regenerates it (`AshQuint.Gen.quint_line/2`);
+      the `quint run` that regenerates it (`AshQuint.Gen.quint_line/2`),
+      then, for a shrunk one, `run: <expression>`, the Quint run of its
+      steps (see `AshQuint.Shrink`);
     * `"traces for <model> are current"`, tagged `quint_model: <model>`,
       which fails when a model file's hash differs from the manifest's, so
       the traces need regenerating with `mix ash_quint.gen`.
@@ -559,24 +561,23 @@ defmodule AshQuint.Case do
   end
 
   # A trace test's failure ends with the trace's path, and for a regression
-  # trace with provenance the command that regenerates it.
+  # trace with provenance the command that regenerates it and, when it was
+  # shrunk, its run.
   defp context(entry, path, setup) do
     trace_line = "trace: " <> Path.join(setup.config.out, entry.file)
 
-    case entry.source == :regression and quint_line(path, setup.project_config) do
-      line when is_binary(line) -> [trace_line, "quint: " <> line]
+    with :regression <- entry.source,
+         {:ok, binary} <- File.read(path),
+         {:ok, provenance} <- Gen.provenance(binary),
+         line when is_binary(line) <- Gen.quint_line(setup.project_config, provenance) do
+      [trace_line, "quint: " <> line] ++ run_line(provenance)
+    else
       _none -> [trace_line]
     end
   end
 
-  defp quint_line(path, config) do
-    with {:ok, binary} <- File.read(path),
-         {:ok, provenance} <- Gen.provenance(binary) do
-      Gen.quint_line(config, provenance)
-    else
-      _error -> nil
-    end
-  end
+  defp run_line(%{"shrunk" => %{"run" => run}}) when is_binary(run), do: ["run:   " <> run]
+  defp run_line(_provenance), do: []
 
   @doc false
   @spec __require_ex_unit__(Macro.Env.t()) :: :ok

@@ -216,7 +216,12 @@ key, with its default:
       scenarios: [
         main: "tests",         # required: the tests module
         match: "Test$"         # optional: which runs
-      ]
+      ],
+      # Shrink explore candidates (see "Shrinking"); default: off.
+      shrink: [
+        apply: "apply",        # optional: the action that takes an action value
+        rounds: 20             # optional: the budget of rounds
+      ]                        # or shrink: true, every default
     ]
   ]
 ]
@@ -229,6 +234,8 @@ key, with its default:
 - Each model's `out` must be its own directory: not the project root, and
   not another model's `out`.
 - `tests` is used only when `scenarios` is set.
+- `shrink` is read only by explore (see "Shrinking"), so turning it on
+  changes no committed trace and `mix ash_quint.gen --check` ignores it.
 - `backend`, when set, is passed as `--backend=<backend>` to every
   `quint run` and `quint test` that gen and explore run (not to
   `quint compile`) and recorded in the manifest. Unset, no flag is passed
@@ -865,7 +872,13 @@ quint: npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.q
 
 `(trace 2)` is the trace's place among the run's outputs
 (`explore_2.itf.json`). Words with characters outside
-`[A-Za-z0-9_./=:@{},+-]` are single-quoted. `AshQuint.Replay.run/3`
+`[A-Za-z0-9_./=:@{},+-]` are single-quoted. A shrunk regression trace (see
+"Shrinking") then adds its steps as a Quint run:
+
+```
+run:   init.then(inc("c1", 1))
+```
+ `AshQuint.Replay.run/3`
 appends its own lines with the `:context` option.
 
 The problems are an outcome mismatch, a failed system call
@@ -1103,7 +1116,10 @@ high-level integration test" (cognitive debt). Put them in
 `model-tests.qnt` and list them under `scenarios:`; Emerald keeps its most
 interesting scenarios in the codebase as Quint runs. A failure explore
 finds is kept the same way, as a promoted regression trace (see
-"Regression traces").
+"Regression traces"). With `shrink:`, explore also prints the shrunk
+trace as a run, `run:       init.then(inc("c1", 1))`, and the promoted
+test prints it as `run:   …`: paste it into `model-tests.qnt` as
+`run regression4031Test = …` to keep it as a scenario too.
 
 **Postconditions for light models.** Neutron's model was "lightweight and
 nimble": correctness was checked by postconditions on the executed
@@ -1220,7 +1236,7 @@ fails.
 
 A trace is named `"<seed>_<index>"`, so its failure message is the start
 of the one its regression test will print (which adds the `trace:` and
-`quint:` lines). A replay failing at step N is cut to its
+`quint:` lines, and `run:` for a shrunk one). A replay failing at step N is cut to its
 states 0..N and replayed once more: when it fails at N again, the cut
 trace is the candidate; otherwise (a race window without a gate, say) the
 full trace is. An exception from the adapter is a failure too, with the
@@ -1254,6 +1270,82 @@ Two modules of one model (`traces: :sequential` and `traces: :concurrent`)
 each run their own session. Concurrent traces need the same care as the
 committed ones: a race the gates don't cover may pass by luck, which the
 second replay shows.
+
+### Shrinking
+
+A candidate is as long as the fresh trace up to its failure, mostly steps
+the bug doesn't need. With `shrink: true` (or `shrink: [apply: …, rounds:
+…]`) in the model's config, explore shrinks each confirmed candidate (one
+that failed at the same step on the second replay; not one that didn't
+reproduce, nor an adapter exception) before writing it:
+
+```text
+counter regression 4031_2, step 1 (Inc), seed 4031: key "counts":
+  expected: %{"c1" => 1}
+  actual:   %{"c1" => 2}
+model step: Inc %{"by" => 1, "ctr" => "c1"}, result :accepted
+candidate: _build/test/ash_quint/explore/counter/regression_4031_2.itf.json (cut to 5 steps)
+shrunk from 5 to 1 steps (2 rounds)
+quint:     npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt … (trace 2)
+run:       init.then(inc("c1", 1))
+promote:   MIX_ENV=test mix ash_quint.promote _build/test/ash_quint/explore/counter/regression_4031_2.itf.json
+```
+
+Dropping a step from the ITF file would leave later states as the model
+computed them with that step, so shrinking asks Quint instead. Every pick
+of a step is in its action value (the model convention), so the steps
+rebuild the trace as a Quint run, `init.then(inc("c1", 2)).then(…)`. Each
+round writes a wrapper module that imports the model's `random: [main: …]`
+module, with one run per reduction (a chunk of the steps before the
+failing one removed), and runs them all in one `quint test`. A run Quint
+passes is a model trace; the first whose replay still fails with the same
+action, at any step, is kept, cut after that step. The chunk halves when
+no reduction is kept, and the loop ends when no single step can be
+removed, or after `rounds` rounds (default 20). The kept trace is
+replayed once more and must fail with that action at its last step.
+
+How a step becomes a call:
+
+- **By convention:** the action variant's name with its first letter
+  lowercased is the operator, and a record pick's fields, in the order the
+  model declares them, are its arguments: `Inc({ ctr: "c1", by: 2 })` is
+  `inc("c1", 2)`. A value or map pick is the one argument, and a unit
+  variant is called bare (`Reset` is `reset`). The order comes from the
+  model interface in the committed manifest, so it needs format 3
+  (`mix ash_quint.gen`).
+- **`apply:`** names a model action that takes the action value, for a
+  model whose operators don't follow the convention:
+
+  ```quint
+  action apply(a: Action): bool = match a {
+    | Init => init
+    | IncStart(r) => incStart(r.op, r.by)
+    | IncDone(r) => incDone(r.op)
+  }
+  ```
+
+  Every call is then `apply(IncStart({ op: "o1", by: 1 }))`.
+
+Before the first round, a run of every step must give back the
+candidate's states, variable by variable: that checks the mapping. When
+it doesn't (an operator that isn't found, arguments in another order,
+nondeterminism inside an operator rather than in `step`), or a value
+can't be written as a Quint literal, the candidate is written as
+confirmed and the block says why: `not shrunk: the model's run differs
+from the trace at step 3, variable "counts"`. A shrunk candidate is the
+kept run's ITF, with `shrunk` (`rounds`, `run`, `steps`) added to its
+provenance; its `args` still regenerate the batch, `steps` counts the
+full trace, and the failure's message is its own replay's. It promotes
+like any other candidate, with the batch's seed.
+
+Each round costs one `quint test` (about a second, mostly Node start-up)
+plus a replay of each passing run against the system, in the test's
+process and sandbox; only failures shrink, and a session stops after
+`--failures` of them. The wrapper and its ITF files go in a fresh
+`_build/<env>/ash_quint/shrink/<model>_<random>/`, removed afterwards.
+
+A reduction must stay in the module's `traces:` selection, so a shrunk
+race isn't promoted as a sequential trace.
 
 ## Databases
 

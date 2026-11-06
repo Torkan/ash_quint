@@ -4,7 +4,8 @@ defmodule AshQuint.ExploreTest do
   # with `mix test --only quint_cli`.
   use ExUnit.Case, async: false
 
-  alias AshQuint.{Explore, Gen, Manifest}
+  alias AshQuint.{Config, Explore, Gen, Manifest, Replay, Trace}
+  alias Config.Model
   alias Mix.Tasks.AshQuint.Promote
 
   alias AshQuint.Test.{
@@ -21,6 +22,9 @@ defmodule AshQuint.ExploreTest do
   @ok_traces "test/fixtures/case/ok/*.itf.json"
   # Found by running the race explore test once; it finds the lost update.
   @race_seed 1
+  # Found by running the off-by-one counter explore over seeds 1..40: its
+  # candidate fails at step 5 and shrinks to one step.
+  @counter_seed 9
 
   defmodule FlakyAdapter do
     @moduledoc false
@@ -557,6 +561,231 @@ defmodule AshQuint.ExploreTest do
     end
   end
 
+  describe "shrinking" do
+    @shrink_batch "test/fixtures/case/shrink/batch/explore.itf.json"
+
+    # A runner that serves `quint run` batches like runner/2, and `quint
+    # test` by evaluating each run of the wrapper on the toy counter
+    # (`reset` sets 0, `inc(n)` adds n), writing its ITF as Quint would.
+    defp shrink_runner(glob \\ @shrink_batch) do
+      batch = runner(glob)
+
+      fn exe, args, opts ->
+        if "test" in args, do: toy_quint_test(args), else: batch.(exe, args, opts)
+      end
+    end
+
+    defp toy_quint_test(args) do
+      send(self(), {:quint_test, args})
+      wrapper = Enum.at(args, Enum.find_index(args, &(&1 == "test")) + 1)
+      "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
+      runs = Regex.scan(~r/^  run (shrink_\d+) = (.*)$/m, File.read!(wrapper))
+
+      for [_line, name, run] <- runs do
+        calls = Regex.scan(~r/\.then\(([a-z]+(?:\(\d+\))?)\)/, run, capture: :all_but_first)
+        init = toy_state(0, "Init", %{"#tup" => []})
+        states = Enum.scan(List.flatten(calls), init, &toy_step/2)
+
+        itf = %{
+          "#meta" => %{"format" => "ITF", "status" => "ok"},
+          "vars" => ~w(count lastAction lastResult),
+          "states" => [init | states]
+        }
+
+        File.write!(String.replace(out, "{test}", name), Jason.encode!(itf))
+      end
+
+      {"", 0}
+    end
+
+    defp toy_step("reset", _state), do: toy_state(0, "Reset", %{"#tup" => []})
+
+    defp toy_step("inc(" <> by, %{"count" => %{"#bigint" => count}}) do
+      by = by |> String.trim_trailing(")") |> String.to_integer()
+      toy_state(String.to_integer(count) + by, "Inc", %{"by" => %{"#bigint" => "#{by}"}})
+    end
+
+    defp toy_state(count, tag, value) do
+      %{
+        "count" => %{"#bigint" => "#{count}"},
+        "lastAction" => %{"tag" => tag, "value" => value},
+        "lastResult" => %{"tag" => "Accepted", "value" => %{"#tup" => []}}
+      }
+    end
+
+    defp quint_tests do
+      receive do
+        {:quint_test, args} -> [args | quint_tests()]
+      after
+        0 -> []
+      end
+    end
+
+    defp block_lines(report) do
+      assert [_header, block] = String.split(Explore.format(:shrink, report), "\n\n")
+      String.split(block, "\n")
+    end
+
+    @off_by_one [model: :shrink, adapter_opts: [faults: [:off_by_one]]]
+
+    test "without shrink: the runner never runs quint test", %{tmp_dir: tmp_dir} do
+      report = run(settings(), [adapter_opts: [faults: [:off_by_one]]], tmp_dir)
+
+      assert [%{shrunk: nil}] = report.failures
+      assert Enum.all?(quint_args(), &("run" in &1 and "test" not in &1))
+    end
+
+    test "a shrunk candidate is written with its provenance", %{tmp_dir: tmp_dir} do
+      report = run(settings(), @off_by_one, tmp_dir, runner: shrink_runner())
+
+      assert [failure] = report.failures
+      assert %{cut_at: nil, reproduced: true} = failure
+
+      assert failure.shrunk == %{from: 3, steps: 1, rounds: 2, run: "init.then(inc(1))"}
+
+      # The message is the shrunk trace's, as its promoted test prints it.
+      assert failure.message =~ ~r/\Ashrink regression 10_0, step 1 \(Inc\), seed 10: /
+
+      binary = File.read!(failure.candidate)
+
+      assert %{"count" => %{"#bigint" => "1"}, "lastAction" => %{"tag" => "Inc"}} =
+               List.last(Jason.decode!(binary)["states"])
+
+      assert length(Jason.decode!(binary)["states"]) == 2
+      assert Jason.decode!(binary)["#meta"]["source"] == "test/fixtures/case/shrink/model.qnt"
+
+      assert {:ok, provenance} = Gen.provenance(binary)
+
+      assert %{
+               "shrunk" => %{"rounds" => 2, "run" => "init.then(inc(1))", "steps" => 1},
+               "steps" => 3,
+               "cut_at" => nil,
+               "seed" => 10,
+               "index" => 0
+             } = provenance
+
+      assert [batch_args] = quint_args() |> Enum.reject(&("test" in &1))
+
+      assert provenance["args"] ==
+               Enum.reject(
+                 batch_args -- ["--yes", "@informalsystems/quint@0.33.1"],
+                 &String.starts_with?(&1, "--out-itf=")
+               )
+
+      # Round 0 and two rounds, each one quint test; the work dir is gone.
+      assert [_round0, _round1, _round2] = quint_tests()
+      assert File.ls!(Path.join(tmp_dir, "build/ash_quint/shrink")) == []
+
+      path = Path.relative_to_cwd(failure.candidate)
+
+      assert Enum.drop(block_lines(report), length(String.split(failure.message, "\n"))) == [
+               "candidate: #{path} (not cut)",
+               "shrunk from 3 to 1 steps (2 rounds)",
+               "quint:     " <> failure.quint,
+               "run:       init.then(inc(1))",
+               "promote:   MIX_ENV=test mix ash_quint.promote #{path}"
+             ]
+    end
+
+    test "with a traces: selection, reductions in it are kept", %{tmp_dir: tmp_dir} do
+      report =
+        run(settings(), [traces: :sequential] ++ @off_by_one, tmp_dir, runner: shrink_runner())
+
+      assert [%{shrunk: %{steps: 1, rounds: 2}}] = report.failures
+    end
+
+    test "a not shrunk candidate says why", %{tmp_dir: tmp_dir} do
+      batch = runner(@shrink_batch)
+
+      runner = fn exe, args, opts ->
+        if "test" in args, do: {"error: boom\nmore\n", 1}, else: batch.(exe, args, opts)
+      end
+
+      report = run(settings(), @off_by_one, tmp_dir, runner: runner)
+
+      assert [failure] = report.failures
+      assert failure.shrunk == {:not_shrunk, "quint test failed: error: boom"}
+      assert failure.message =~ ~r/\Ashrink regression 10_0, step 3 \(Inc\), seed 10: /
+
+      binary = File.read!(failure.candidate)
+      assert length(Jason.decode!(binary)["states"]) == 4
+      assert {:ok, provenance} = Gen.provenance(binary)
+      refute Map.has_key?(provenance, "shrunk")
+
+      path = Path.relative_to_cwd(failure.candidate)
+
+      assert Enum.drop(block_lines(report), length(String.split(failure.message, "\n"))) == [
+               "candidate: #{path} (not cut)",
+               "not shrunk: quint test failed: error: boom",
+               "quint:     " <> failure.quint,
+               "promote:   MIX_ENV=test mix ash_quint.promote #{path}"
+             ]
+    end
+
+    test "no interface: not shrunk", %{tmp_dir: tmp_dir} do
+      # The ok fixture model, whose manifest is format 1, with shrink: on.
+      config = Path.join(tmp_dir, "ash_quint.exs")
+
+      File.write!(config, """
+      [
+        quint: "0.33.1",
+        models: [
+          ok: [
+            model: "test/fixtures/case/ok/model.qnt",
+            out: "test/fixtures/case/ok",
+            seed: 7,
+            random: [main: "toy", max_steps: 3],
+            shrink: true
+          ]
+        ]
+      ]
+      """)
+
+      loaded = Config.load!(config)
+
+      {:error, message} =
+        Manifest.load(loaded, Config.model!(loaded, :ok), need: :interface)
+
+      report =
+        run(settings(), [config: config, adapter_opts: [faults: [:off_by_one]]], tmp_dir,
+          runner: shrink_runner(@ok_traces)
+        )
+
+      assert [failure] = report.failures
+      assert failure.shrunk == {:not_shrunk, message}
+      assert ("not shrunk: " <> message) in String.split(Explore.format(:ok, report), "\n")
+      assert quint_tests() == []
+    end
+
+    test "a candidate that didn't reproduce isn't shrunk", %{tmp_dir: tmp_dir} do
+      {:ok, agent} = Agent.start_link(fn -> true end)
+
+      report =
+        run(
+          settings(),
+          [model: :shrink, adapter: FlakyAdapter, adapter_opts: [agent: agent]],
+          tmp_dir,
+          runner: shrink_runner()
+        )
+
+      assert [%{reproduced: false, shrunk: nil}] = report.failures
+      assert quint_tests() == []
+    end
+
+    test "an adapter exception isn't shrunk", %{tmp_dir: tmp_dir} do
+      report =
+        run(
+          settings(),
+          [model: :shrink, adapter_opts: [faults: [:raise]]],
+          tmp_dir,
+          runner: shrink_runner()
+        )
+
+      assert [%{reproduced: nil, shrunk: nil}] = report.failures
+      assert quint_tests() == []
+    end
+  end
+
   describe "run!/2" do
     @env ~w(ASH_QUINT_EXPLORE ASH_QUINT_EXPLORE_RUNS ASH_QUINT_EXPLORE_SEED
             ASH_QUINT_EXPLORE_BUDGET ASH_QUINT_EXPLORE_FAILURES)
@@ -870,17 +1099,26 @@ defmodule AshQuint.ExploreTest do
                String.split(Explore.format(:counter, report), "\n")
     end
 
-    test "an off-by-one adapter fails and its candidate promotes", %{tmp_dir: tmp_dir} do
+    test "an off-by-one counter candidate shrinks, promotes and fails the same way", %{
+      tmp_dir: tmp_dir
+    } do
       report =
         quint_run(
           [model: :counter, adapter: CounterAdapterOffByOne],
-          %{runs: 20, seed: 1},
+          %{runs: 20, seed: @counter_seed},
           tmp_dir
         )
 
-      assert [%{reproduced: true, cut_at: cut_at} = failure] = report.failures
-      assert is_integer(cut_at)
+      assert [%{reproduced: true, shrunk: %{from: from, steps: steps}} = failure] =
+               report.failures
+
+      assert steps < from
       assert failure.message =~ "counter regression #{failure.seed}_#{failure.index}, step "
+
+      binary = File.read!(failure.candidate)
+      assert Jason.decode!(binary)["#meta"]["status"] == "ok"
+      assert {:ok, %{"shrunk" => %{"steps" => ^steps, "run" => run}}} = Gen.provenance(binary)
+      assert run == failure.shrunk.run
 
       root = Path.join(tmp_dir, "root")
       File.mkdir_p!(root)
@@ -900,6 +1138,20 @@ defmodule AshQuint.ExploreTest do
       end
 
       name = "#{failure.seed}_#{failure.index}"
+      promoted = Path.join(root, "priv/examples/counter/traces/regression_#{name}.itf.json")
+
+      # The promoted trace, replayed with the batch's seed, fails with Inc at
+      # its last step.
+      trace = Trace.load!(promoted, name: name, source: :regression, seed: failure.seed)
+      model = Config.model!(Config.load!(), :counter)
+
+      assert {:error, %{index: ^steps, action: "Inc"}} =
+               Replay.run(
+                 CounterAdapterOffByOne,
+                 trace,
+                 Model.replay_opts(model)
+               )
+
       mod = Module.concat(__MODULE__, "Promoted#{System.unique_integer([:positive])}")
 
       File.cd!(root, fn ->
@@ -915,7 +1167,7 @@ defmodule AshQuint.ExploreTest do
       assert %{quint: :regression} = tests[:"test regression #{name}"]
 
       # The promoted test fails with the message explore reported, then the
-      # trace file and the quint command explore printed.
+      # trace file, the quint command and the run explore printed.
       error =
         assert_raise ExUnit.AssertionError, fn ->
           File.cd!(root, fn -> apply(mod, :"test regression #{name}", [%{}]) end)
@@ -924,7 +1176,7 @@ defmodule AshQuint.ExploreTest do
       assert error.message ==
                failure.message <>
                  "\ntrace: priv/examples/counter/traces/regression_#{name}.itf.json" <>
-                 "\nquint: " <> failure.quint
+                 "\nquint: " <> failure.quint <> "\nrun:   " <> run
 
       assert failure.quint =~
                " --backend=rust --witnesses witOverLimit witResetAfterInc " <>

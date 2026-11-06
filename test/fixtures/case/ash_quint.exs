@@ -16,6 +16,9 @@ end
     no_manifest: model.(:no_manifest, []),
     empty: model.(:empty, []),
     concurrent: model.(:concurrent, []),
-    promoted: model.(:promoted, [])
+    promoted: model.(:promoted, []),
+    # A format 3 manifest and a shrunk regression; batch/ has an explore
+    # trace whose leading Resets shrink away.
+    shrink: model.(:shrink, random: [main: "toy", max_steps: 3], shrink: true)
   ]
 ]

@@ -26,8 +26,8 @@ defmodule Mix.Tasks.AshQuint.Explore do
       failures (default 1).
 
   The variables are restored afterwards. A failing explore test fails the
-  task, listing each candidate and the `mix ash_quint.promote` command
-  that commits it. When no explore test runs, the task fails asking for
+  task, listing each candidate (shrunk, with the model's `shrink:`) and
+  the `mix ash_quint.promote` command that commits it. When no explore test runs, the task fails asking for
   `explore: true`.
 
   Run it as `MIX_ENV=test mix ash_quint.explore` (or add

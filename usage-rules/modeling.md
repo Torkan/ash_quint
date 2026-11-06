@@ -29,7 +29,19 @@ The practices behind these rules, with their sources, are in the README's
   reports how often fresh traces reach each one; `never` means the random
   traces don't test that scenario.
 - Concrete scenarios are `run` tests in `model-tests.qnt`, configured under
-  `scenarios:`.
+  `scenarios:`. A shrunk explore candidate prints its steps as a run
+  (`run:       init.then(inc("c1", 1))`); paste it into `model-tests.qnt`
+  to keep the failure as a scenario as well as a regression trace.
+- To let explore shrink its candidates (`shrink: true`), keep every pick
+  of a step in its action value and name each step action after its
+  variant: `Inc({ ctr: "c1", by: 2 })` is called as `inc("c1", 2)`, the
+  variant's name with its first letter lowercased, with the record's
+  fields in their declared order as arguments; a value or map pick is the
+  one argument, and a unit variant is called bare. A model whose actions
+  don't fit adds `action apply(a: Action): bool = match a { … }` and sets
+  `shrink: [apply: "apply"]`. Keep nondeterminism in `step`, not inside
+  the actions: shrinking checks that the calls give back the candidate's
+  states first, and doesn't shrink when they don't.
 - With concurrency, model what the system visibly shows: the replay
   compares state while calls are in flight, so uncommitted writes don't
   belong in projected variables.

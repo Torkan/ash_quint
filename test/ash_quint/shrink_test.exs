@@ -2,6 +2,8 @@ defmodule AshQuint.ShrinkTest do
   use ExUnit.Case, async: true
 
   alias AshQuint.Config
+  alias AshQuint.Gen
+  alias AshQuint.ITF
   alias AshQuint.Manifest
   alias AshQuint.Shrink
 
@@ -682,6 +684,67 @@ defmodule AshQuint.ShrinkTest do
       calls = quint_calls()
       assert length(calls) > 1
       assert Enum.all?(calls, fn {args, _} -> "--backend=rust" in args end)
+    end
+  end
+
+  describe "round 0 with Quint" do
+    # Real Quint through npx: excluded by default, run with
+    # `mix test --only quint_cli`.
+    @describetag :quint_cli
+    @describetag :tmp_dir
+    @describetag timeout: 300_000
+
+    # The calls of each committed random trace of `model` as one run each,
+    # in one quint test: each run's states, decoded, and the trace's.
+    defp round_zero(model, tmp_dir) do
+      files = model.out |> Path.join("random_*.itf.json") |> Path.wildcard() |> Enum.sort()
+      assert files != []
+      interface = interface(model)
+
+      runs =
+        files
+        |> Enum.with_index()
+        |> Enum.map(fn {file, k} ->
+          assert {:ok, calls} = Shrink.calls(Jason.decode!(File.read!(file)), interface, model)
+          {"shrink_#{k}", calls}
+        end)
+
+      wrapper = Path.join(tmp_dir, "ash_quint_shrink.qnt")
+      import = Shrink.import_path(Path.expand(model.model), tmp_dir)
+      File.write!(wrapper, Shrink.wrapper(model, import, runs))
+
+      args =
+        ["test", wrapper, "--main=ash_quint_shrink", "--match=^shrink_[0-9]+$", "--seed=1"] ++
+          Gen.backend_args(model) ++ ["--out-itf=#{tmp_dir}/{test}.itf.json"]
+
+      runner = fn exe, args, opts -> System.cmd(exe, args, opts ++ [stderr_to_stdout: true]) end
+      assert {:ok, output, 0} = Gen.run_quint(@config, args, runner)
+
+      for {file, {name, _calls}} <- Enum.zip(files, runs) do
+        run = Jason.decode!(File.read!(Path.join(tmp_dir, "#{name}.itf.json")))
+        assert run["#meta"]["status"] == "ok", output
+        {states(file), ITF.decode!(run, name).states}
+      end
+    end
+
+    defp states(file), do: ITF.read!(file).states
+
+    test "round 0 reproduces the committed counter traces", %{tmp_dir: tmp_dir} do
+      for {expected, actual} <- round_zero(@counter, tmp_dir), do: assert(actual == expected)
+    end
+
+    test "round 0 reproduces the committed race traces", %{tmp_dir: tmp_dir} do
+      for {expected, actual} <- round_zero(@race, tmp_dir), do: assert(actual == expected)
+    end
+
+    test "round 0 with apply", %{tmp_dir: tmp_dir} do
+      model = %{
+        @race
+        | model: "test/fixtures/shrink/race_apply/model.qnt",
+          shrink: [apply: "apply"]
+      }
+
+      for {expected, actual} <- round_zero(model, tmp_dir), do: assert(actual == expected)
     end
   end
 end
