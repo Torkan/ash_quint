@@ -249,3 +249,36 @@ defmodule AshQuint.Test.ToyAdapterConstant do
   @impl true
   defdelegate outcome(result), to: ToyAdapter
 end
+
+defmodule AshQuint.Test.ToyAdapterCounts do
+  @moduledoc false
+  # The toy adapter that projects its count as counter "c07" of twelve, the
+  # others 0, under the key "counts": a long map for the key mismatch diff.
+  # `counts/1` builds the model's value for a count.
+  use AshQuint.Adapter
+
+  alias AshQuint.Test.ToyAdapter
+
+  @impl true
+  defdelegate init(trace, opts), to: ToyAdapter
+
+  @impl true
+  defdelegate step(ctx, step), to: ToyAdapter
+
+  @impl true
+  def project(ctx), do: %{"counts" => counts(ctx.count)}
+
+  @impl true
+  defdelegate outcome(result), to: ToyAdapter
+
+  @doc "Twelve counters `c01`…`c12`, all 0 but `c07`, which is `count`."
+  def counts(count) do
+    Map.new(1..12, fn i ->
+      name = "c" <> String.pad_leading(Integer.to_string(i), 2, "0")
+      {name, if(i == 7, do: count, else: 0)}
+    end)
+  end
+
+  @doc "`state` with the model's `counts` for its `count`."
+  def with_counts(state), do: Map.put(state, "counts", counts(state["count"]))
+end

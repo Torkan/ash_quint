@@ -625,6 +625,30 @@ adapter propagate as they are, without the prefix. That includes a missing
 clause in a helper that `step/2` delegates to: only a `FunctionClauseError`
 from the adapter's own `step/2` is reported as a missing clause.
 
+A projected key that differs shows both values:
+
+```
+key "count":
+  expected: 1
+  actual:   0
+```
+
+When either value is long (over 60 characters or several lines) and both
+are maps or both are `MapSet`s, only the differences are listed, depth
+first, keys sorted, with the path of keys (at most 20 lines, then
+`… and 7 more differences`):
+
+```
+key "counts":
+  "c1": expected 3, actual 4
+  "c2": missing (expected 0)
+  "c3": unexpected (actual 1)
+  "c4" > "limit": expected 3, actual 5
+  "done": missing ["o1"], unexpected ["o3"]
+```
+
+Any other long pair is shown whole.
+
 With calls in flight, the problems include:
 
 ```

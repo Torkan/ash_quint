@@ -4,7 +4,7 @@ defmodule AshQuint.ReplayTest do
   import AshQuint.Test.TraceBuilder
 
   alias AshQuint.{ITF, Replay}
-  alias AshQuint.Test.{ToyAdapter, ToyAdapterMissingKey, ToyAdapterNoReset}
+  alias AshQuint.Test.{ToyAdapter, ToyAdapterCounts, ToyAdapterMissingKey, ToyAdapterNoReset}
 
   @prefix "counter random t, step"
   @use_start "use {:start, op, call, ctx} and {:complete, op, ctx} for calls that stay in flight"
@@ -35,6 +35,29 @@ defmodule AshQuint.ReplayTest do
 
     @impl true
     def project(_ctx), do: %{}
+  end
+
+  defmodule ShortMapAdapter do
+    @moduledoc false
+    # The toy adapter projecting its count as the short map %{"c1" => count}.
+    use AshQuint.Adapter
+
+    alias AshQuint.Step
+
+    @impl true
+    defdelegate init(trace, opts), to: ToyAdapter
+
+    @impl true
+    defdelegate step(ctx, step), to: ToyAdapter
+
+    @impl true
+    def project(ctx), do: %{"count" => %{"c1" => ctx.count}}
+
+    @impl true
+    def expected(_ctx, %Step{state: state}), do: %{"count" => %{"c1" => state["count"]}}
+
+    @impl true
+    defdelegate outcome(result), to: ToyAdapter
   end
 
   defmodule NoUse do
@@ -226,6 +249,28 @@ defmodule AshQuint.ReplayTest do
     assert message(states) ==
              "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: " <>
                inspect(big, pretty: true) <> "\n  actual:   1"
+  end
+
+  test "a short map mismatch keeps the expected/actual form" do
+    assert message(clean(), [:off_by_one], adapter: ShortMapAdapter) ==
+             "#{@prefix} 1 (Inc), seed 7: key \"count\":\n" <>
+               "  expected: %{\"c1\" => 1}\n  actual:   %{\"c1\" => 2}"
+  end
+
+  test "a long map mismatch lists only the differing entries" do
+    states = Enum.map(clean(), &ToyAdapterCounts.with_counts/1)
+
+    assert message(states, [:off_by_one], adapter: ToyAdapterCounts) ==
+             "#{@prefix} 1 (Inc), seed 7: key \"counts\":\n  \"c07\": expected 1, actual 2"
+  end
+
+  test "a long non-map mismatch keeps the whole values" do
+    long = String.duplicate("x", 70)
+    states = [init(), Map.put(inc(1, 1), "count", long)]
+
+    assert message(states) ==
+             "#{@prefix} 1 (Inc), seed 7: key \"count\":\n" <>
+               "  expected: #{inspect(long)}\n  actual:   1"
   end
 
   test "missing expected key" do

@@ -4,7 +4,7 @@ defmodule AshQuint.SensitivityTest do
   import AshQuint.Test.TraceBuilder
 
   alias AshQuint.Sensitivity
-  alias AshQuint.Test.{ToyAdapter, ToyAdapterBlindReset, ToyAdapterLimit}
+  alias AshQuint.Test.{ToyAdapter, ToyAdapterBlindReset, ToyAdapterCounts, ToyAdapterLimit}
 
   defmodule TickAdapter do
     @moduledoc false
@@ -235,6 +235,18 @@ defmodule AshQuint.SensitivityTest do
              survived: [{:perturb, "random t", 2, "count"}, {:drop, "random t", 2, "Inc"}],
              untested: [],
              tested: [{:key, "count"}, {:call, "Inc"}]
+           }
+  end
+
+  test "a perturbed long map is still caught" do
+    states =
+      Enum.map([init(), inc(1, 1), inc(3, 2), reset()], &ToyAdapterCounts.with_counts/1)
+
+    assert check(ToyAdapterCounts, [states]) == %{
+             never_overlap: [],
+             survived: [],
+             untested: [],
+             tested: [{:key, "counts"}, {:call, "Inc"}, {:call, "Reset"}]
            }
   end
 

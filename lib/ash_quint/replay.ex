@@ -52,7 +52,7 @@ defmodule AshQuint.Replay do
 
   @compile {:no_warn_undefined, AshQuint.Gate.Telemetry}
 
-  alias AshQuint.{Adapter, Gate, Step, Trace}
+  alias AshQuint.{Adapter, Diff, Gate, Step, Trace}
   alias AshQuint.Gate.Telemetry, as: GateTelemetry
   alias AshQuint.Replay.Ops
 
@@ -756,9 +756,24 @@ defmodule AshQuint.Replay do
   defp key_error(_key, actual, {:ok, actual}), do: nil
 
   defp key_error(key, actual, {:ok, expected}) do
-    "key #{inspect(key)}:\n" <>
-      "  expected: #{inspect(expected, pretty: true)}\n" <>
-      "  actual:   #{inspect(actual, pretty: true)}"
+    header = "key #{inspect(key)}:\n"
+
+    with false <- short?(expected) and short?(actual),
+         {:ok, lines} <- Diff.lines(expected, actual) do
+      header <> Enum.map_join(lines, "\n", &("  " <> &1))
+    else
+      _short_or_whole ->
+        header <>
+          "  expected: #{inspect(expected, pretty: true)}\n" <>
+          "  actual:   #{inspect(actual, pretty: true)}"
+    end
+  end
+
+  @short 60
+
+  defp short?(value) do
+    text = inspect(value)
+    String.length(text) <= @short and not String.contains?(text, "\n")
   end
 
   defp invariant_errors(run, projected, ctx) do

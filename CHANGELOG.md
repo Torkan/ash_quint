@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A long mismatch on a projected key whose values are both maps (or both
+  `MapSet`s) lists only the differing entries, with their key paths
+  (`"c4" > "limit": expected 3, actual 5`), instead of both values whole.
+  Short values keep the `expected:`/`actual:` form.
 - `AshQuint.Adapter` has an optional `finish/2`, which `AshQuint.Replay`
   calls once when a replay ends, pass or fail (also before an adapter
   exception propagates), with the latest `ctx`. Use it to release what a
