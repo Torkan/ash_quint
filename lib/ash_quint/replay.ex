@@ -177,7 +177,7 @@ defmodule AshQuint.Replay do
       adapter: adapter,
       trace: trace,
       model: Keyword.get(opts, :model),
-      step_opts: Keyword.take(opts, [:action_path, :result_path, :pending_result, :op_field]),
+      step_opts: Step.options(opts),
       init_action: Keyword.get(opts, :init_action, "Init"),
       mutate: Keyword.get(opts, :mutate),
       context: Keyword.get(opts, :context, []),

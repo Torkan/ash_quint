@@ -49,7 +49,8 @@ defmodule AshQuint.Explore do
   committed manifest, read once per session, and work directories under
   `<build>/ash_quint/shrink/`); a reduction must stay in the `traces:`
   selection. A shrunk candidate is written instead of the confirmed one,
-  with `shrunk` (`rounds`, `run`, `steps`) added to its provenance, and its
+  with `shrunk` (`rounds`, `run`, `steps`) added to its provenance (whose
+  `args` still regenerate the batch's original trace), and its
   confirmation replay's message becomes the failure's. A candidate that
   can't be shrunk is written as confirmed, with the reason in the report.
 
@@ -432,9 +433,8 @@ defmodule AshQuint.Explore do
     )
   end
 
-  # A reduction must stay in the selection that found the candidate.
-  defp keep?(%{traces: :all}, _binary, _name, _seed, _index), do: true
-
+  # A reduction must decode, since the replay decodes it outside its
+  # rescue, and stay in the selection that found the candidate.
   defp keep?(session, binary, name, seed, index) do
     selected?(session, decode(binary, name, seed), index)
   rescue
@@ -582,8 +582,9 @@ defmodule AshQuint.Explore do
   blank line, by each failure's message, its candidate (relative to the
   current directory), with shrinking `shrunk from <n> to <m> steps (<k>
   rounds)` or `not shrunk: <reason>`, the `quint run` command that
-  regenerates its trace (`AshQuint.Gen.quint_line/2`), a shrunk
-  candidate's `run:` expression and the `mix ash_quint.promote` command
+  regenerates its trace as the batch generated it
+  (`AshQuint.Gen.quint_line/2`), a shrunk candidate's `run:` expression
+  and the `mix ash_quint.promote` command
   for it, and then the error.
   """
   @spec format(atom(), report()) :: String.t()

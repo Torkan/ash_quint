@@ -36,9 +36,9 @@ action binding its picks and a `project/1` with every model variable.
   tries no perturbed key and no variable check. With postconditions, each
   action none of whose calls changes the projected state (without
   `project/1`, every action) gets a dropped-call mutant at its first
-  accepted call: a
-  postcondition that notices the missing effect makes the action tested;
-  one that doesn't is reported, and the action stays untested.
+  accepted call: a postcondition that notices the missing effect makes the
+  action tested; one that doesn't is reported, and the action stays
+  untested.
 - An adapter with neither `project/1` nor postconditions checks outcomes
   and invariants only.
 
@@ -72,7 +72,8 @@ action binding its picks and a `project/1` with every model variable.
   <seed>: `, lists every problem of that step, then `model step:` (the
   model's picks and result), `trace:` and, for a found trace, `quint:`,
   the command that regenerates it, and for a shrunk one `run:`, its steps
-  as a Quint run.
+  as a Quint run. A shrunk trace's `quint:` line regenerates the batch's
+  original, unshrunk trace; only its `run:` line is the shrunk one.
 - Decide whether the system or the model is wrong before changing either.
   A failure in an explore candidate is a bug to fix, then a trace to
   promote with `mix ash_quint.promote`.

@@ -73,6 +73,14 @@ defmodule AshQuint.Step do
   end
 
   @doc """
+  The step options (`t:option/0`) among `opts`, such as
+  `AshQuint.Replay.run/3`'s.
+  """
+  @spec options(keyword()) :: [option()]
+  def options(opts),
+    do: Keyword.take(opts, [:action_path, :result_path, :pending_result, :op_field])
+
+  @doc """
   The top-level variables that `action_path` and `result_path` in `opts`
   start with (by default `"lastAction"` and `"lastResult"`): the ones a
   step's `state` leaves out.

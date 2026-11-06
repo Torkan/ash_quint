@@ -31,7 +31,8 @@ The practices behind these rules, with their sources, are in the README's
 - Concrete scenarios are `run` tests in `model-tests.qnt`, configured under
   `scenarios:`. A shrunk explore candidate prints its steps as a run
   (`run:       init.then(inc("c1", 1))`); paste it into `model-tests.qnt`
-  to keep the failure as a scenario as well as a regression trace.
+  to keep the failure as a scenario as well as a regression trace. Its
+  `quint:` line regenerates the original, unshrunk trace, not this run.
 - To let explore shrink its candidates (`shrink: true`), keep every pick
   of a step in its action value and name each step action after its
   variant: `Inc({ ctr: "c1", by: 2 })` is called as `inc("c1", 2)`, the

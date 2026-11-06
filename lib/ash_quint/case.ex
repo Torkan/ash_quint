@@ -27,7 +27,8 @@ defmodule AshQuint.Case do
       root, and, for a regression trace with provenance, `quint: <command>`,
       the `quint run` that regenerates it (`AshQuint.Gen.quint_line/2`),
       then, for a shrunk one, `run: <expression>`, the Quint run of its
-      steps (see `AshQuint.Shrink`);
+      steps (see `AshQuint.Shrink`; its `quint:` line still regenerates
+      the batch's original, unshrunk trace);
     * `"traces for <model> are current"`, tagged `quint_model: <model>`,
       which fails when a model file's hash differs from the manifest's, so
       the traces need regenerating with `mix ash_quint.gen`.

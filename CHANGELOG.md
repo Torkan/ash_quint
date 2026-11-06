@@ -18,8 +18,10 @@
   rounds)` or `not shrunk: <reason>` after the candidate line and
   `run:       <run>` after `quint:`; the report's failures gain `shrunk`.
   A promoted shrunk trace's test prints `run:   <run>` after its `quint:`
-  line. The examples' config turns it on for `counter` and `race`. The
-  loop's Quint model is in `models/practices/` (not packaged).
+  line, which still regenerates the batch's original, unshrunk trace.
+  New helpers `AshQuint.Gen.cut/2` and `AshQuint.Gen.put_source/2`. The
+  examples' config turns it on for `counter` and `race`. The loop's Quint
+  model is in `models/practices/` (not packaged).
 - Docs: a README section "Modelling practices" (from Quint's write-ups on
   model-based testing, mapped to ash_quint), `backend:` in the README's
   configuration, and usage rules for agents, packaged with the library:
@@ -31,8 +33,9 @@
   `{:pending, …}`, not on the initial state), after the state comparison
   and the invariants. Failures read `postcondition <name>: <message>` (or
   `postcondition <name> raised: <message>`), among the step's other
-  problems. New helpers `AshQuint.Adapter.project/2` and
-  `AshQuint.Adapter.postconditions/1`, and type
+  problems. New helpers `AshQuint.Adapter.project/2`,
+  `AshQuint.Adapter.postconditions/1` and `AshQuint.Step.options/1` (the
+  step options among a replay's), and type
   `t:AshQuint.Adapter.postcondition/0`.
 - `project/1` is optional: without it the projection is `%{}` and no key is
   compared. The sensitivity check then tries no perturbed key and no

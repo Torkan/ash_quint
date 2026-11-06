@@ -174,7 +174,7 @@ defmodule AshQuint.Sensitivity do
     if Adapter.postconditions(adapter) == [] do
       %{}
     else
-      step_opts = Keyword.take(opts, [:action_path, :result_path, :pending_result, :op_field])
+      step_opts = Step.options(opts)
 
       found =
         for {trace, report} <- reports,

@@ -120,7 +120,7 @@ defmodule AshQuint.Shrink do
   end
 
   defp do_render(%{"s" => _, "e" => _, "c" => _} = value) when map_size(value) == 3 do
-    case AshQuint.ITF.decode_value(value, "$") do
+    case ITF.decode_value(value, "$") do
       integer when is_integer(integer) -> {:ok, Integer.to_string(integer)}
       _record -> record(value)
     end
@@ -207,7 +207,7 @@ defmodule AshQuint.Shrink do
   def calls(_itf, %Interface{}, %Model{}), do: {:ok, []}
 
   defp action_value(state, [root | rest]) do
-    case Enum.find(state, fn {name, _} -> AshQuint.ITF.strip(name) == root end) do
+    case Enum.find(state, fn {name, _} -> ITF.strip(name) == root end) do
       {_name, value} -> {Enum.join([root | rest], "."), dig(value, rest)}
       nil -> {Enum.join([root | rest], "."), nil}
     end

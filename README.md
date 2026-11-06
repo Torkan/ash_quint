@@ -878,8 +878,11 @@ quint: npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.q
 ```
 run:   init.then(inc("c1", 1))
 ```
- `AshQuint.Replay.run/3`
-appends its own lines with the `:context` option.
+
+The `quint:` line still regenerates the batch's original trace, as
+explore found it (before the cut and the shrinking); the `run:` line is
+the shrunk trace's steps. Callers of `AshQuint.Replay.run/3` append their
+own lines with the `:context` option.
 
 The problems are an outcome mismatch, a failed system call
 (`{:failed, message}`), a missing `step/2` clause, a bad return value, a
@@ -1236,10 +1239,10 @@ fails.
 
 A trace is named `"<seed>_<index>"`, so its failure message is the start
 of the one its regression test will print (which adds the `trace:` and
-`quint:` lines, and `run:` for a shrunk one). A replay failing at step N is cut to its
-states 0..N and replayed once more: when it fails at N again, the cut
-trace is the candidate; otherwise (a race window without a gate, say) the
-full trace is. An exception from the adapter is a failure too, with the
+`quint:` lines, and `run:` for a shrunk one). A replay failing at step N
+is cut to its states 0..N and replayed once more: when it fails at N
+again, the cut trace is the candidate; otherwise (a race window without a
+gate, say) the full trace is. An exception from the adapter is a failure too, with the
 full trace. The candidate gets its provenance in `#meta.ash_quint` and is
 written to `_build/<env>/ash_quint/explore/<model>/`, and the test fails
 listing each one with the command that regenerates its trace and the
@@ -1335,7 +1338,9 @@ confirmed and the block says why: `not shrunk: the model's run differs
 from the trace at step 3, variable "counts"`. A shrunk candidate is the
 kept run's ITF, with `shrunk` (`rounds`, `run`, `steps`) added to its
 provenance; its `args` still regenerate the batch, `steps` counts the
-full trace, and the failure's message is its own replay's. It promotes
+full trace, and the failure's message is its own replay's. So the
+`quint:` line regenerates the original, unshrunk trace; the `run:` line,
+as a `run` in `model-tests.qnt`, reproduces the shrunk one. It promotes
 like any other candidate, with the batch's seed.
 
 Each round costs one `quint test` (about a second, mostly Node start-up)

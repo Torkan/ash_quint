@@ -52,8 +52,9 @@ $Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10
   steps.
 - `AshQuint.Adapter`, `AshQuint.Names`, `AshQuint.Replay` — the adapter
   behaviour (`project/1` optional; `postconditions/0`, checked after the
-  state comparison and the invariants) and the replay; `AshQuint.Replay.Ops` (internal) — the ops in
-  flight during a concurrent replay; `AshQuint.Diff` (internal) — the
+  state comparison and the invariants) and the replay;
+  `AshQuint.Replay.Ops` (internal) — the ops in flight during a concurrent
+  replay; `AshQuint.Diff` (internal) — the
   differing entries of a long key mismatch.
 - `AshQuint.Gate` — gates (`checkpoint/1`, `put_info/2`,
   `current_replay/0`) and the op-task primitives;
@@ -102,7 +103,12 @@ $Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10
   the driver `shrink/3` (round 0, the rounds through `quint test`, the
   final confirmation); `AshQuint.Shrink.Loop` (internal) — the loop's
   state machine, mapped 1:1 to `models/practices/model.qnt` (its
-  `quint_cli` test replays the model's traces against it).
+  `quint_cli` test replays the model's traces against it). Fixtures:
+  `test/fixtures/case/shrink/` (the `:shrink` model of
+  `test/fixtures/case/ash_quint.exs`: a format 3 manifest, a shrunk
+  regression and, in `batch/`, an explore trace that shrinks) and
+  `test/fixtures/shrink/race_apply/model.qnt` (the race model with an
+  `apply` action, for `shrink: [apply: "apply"]`).
 - `models/practices/` — the shrink loop's Quint model and its tests (a
   spec artefact, not an example; not packaged, not in `ash_quint.exs`;
   mirrored in Redline `ash_quint/practices/model`). Its commands are in

@@ -694,6 +694,32 @@ defmodule AshQuint.ExploreTest do
       assert [%{shrunk: %{steps: 1, rounds: 2}}] = report.failures
     end
 
+    test "a reduction Quint passes but that can't be decoded isn't kept", %{tmp_dir: tmp_dir} do
+      batch = shrink_runner()
+
+      # Round 0 as Quint writes it; every later run passes with a state the
+      # ITF decoder refuses.
+      runner = fn exe, args, opts ->
+        result = batch.(exe, args, opts)
+
+        if "test" in args and Process.put(:round_zero_done, true) do
+          "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
+
+          for path <- Path.wildcard(String.replace(out, "{test}", "*")) do
+            itf = Jason.decode!(File.read!(path))
+            states = List.update_at(itf["states"], -1, &Map.put(&1, "count", %{"#odd" => 1}))
+            File.write!(path, Jason.encode!(%{itf | "states" => states}))
+          end
+        end
+
+        result
+      end
+
+      report = run(settings(), @off_by_one, tmp_dir, runner: runner)
+
+      assert [%{shrunk: {:not_shrunk, "no step could be removed"}}] = report.failures
+    end
+
     test "a not shrunk candidate says why", %{tmp_dir: tmp_dir} do
       batch = runner(@shrink_batch)
 
