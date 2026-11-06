@@ -1,5 +1,6 @@
 {
   "ash_quint": 3,
+  "backend": "rust",
   "interface": {
     "actions": [
       {

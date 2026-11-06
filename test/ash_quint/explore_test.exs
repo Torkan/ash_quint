@@ -213,6 +213,36 @@ defmodule AshQuint.ExploreTest do
       assert %{generated: 2, replayed: 1, seeds: 10..10, error: nil} = report
     end
 
+    test "batches pass the model's backend and record it in the provenance args", %{
+      tmp_dir: tmp_dir
+    } do
+      # The ok fixture model, with a backend.
+      config = Path.join(tmp_dir, "ash_quint.exs")
+
+      File.write!(config, """
+      [
+        quint: "0.33.1",
+        models: [
+          ok: [
+            model: "test/fixtures/case/ok/model.qnt",
+            out: "test/fixtures/case/ok",
+            seed: 7,
+            backend: "rust",
+            random: [main: "toy", max_steps: 3]
+          ]
+        ]
+      ]
+      """)
+
+      report = run(settings(), [config: config, adapter_opts: [faults: [:off_by_one]]], tmp_dir)
+
+      assert [args] = quint_args()
+      assert "--backend=rust" in args
+      assert [%{candidate: candidate}] = report.failures
+      assert {:ok, %{"args" => recorded}} = Gen.provenance(File.read!(candidate))
+      assert "--backend=rust" in recorded
+    end
+
     test "a failure at the last step isn't cut", %{tmp_dir: tmp_dir} do
       runner = runner("test/fixtures/case/ok/scenario_incTest.itf.json")
 

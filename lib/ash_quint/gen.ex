@@ -6,14 +6,14 @@ defmodule AshQuint.Gen do
   For each model, `generate/3` runs, from the project root:
 
     * **random:** `quint run <model> --main --seed [--init] [--step] [--max-steps]
-      [--max-samples] [--n-traces] --out-itf=<tmp>/random_{seq}.itf.json`.
-      Any non-zero exit is an error.
+      [--max-samples] [--n-traces] [--backend]
+      --out-itf=<tmp>/random_{seq}.itf.json`. Any non-zero exit is an error.
     * **witnesses:** for each name, `quint run <model> --main --seed
-      [--init] [--step] [--max-steps] [--max-samples] --invariant=not(<name>)
-      --out-itf=<tmp>/witness_<name>.itf.json`. The witness is reached when
-      Quint exits non-zero, the file exists and its `#meta.status` is
-      `"violation"`.
-    * **scenarios:** `quint test <tests> --main [--match] --seed
+      [--init] [--step] [--max-steps] [--max-samples] [--backend]
+      --invariant=not(<name>) --out-itf=<tmp>/witness_<name>.itf.json`.
+      The witness is reached when Quint exits non-zero, the file exists
+      and its `#meta.status` is `"violation"`.
+    * **scenarios:** `quint test <tests> --main [--match] --seed [--backend]
       --out-itf=<tmp>/scenario_{test}_{seq}.itf.json`; each file is renamed
       to `scenario_<test>.itf.json`. Any non-zero exit is an error.
 
@@ -96,7 +96,7 @@ defmodule AshQuint.Gen do
           args =
             ["run", model.model, "--main=#{opts[:main]}", seed] ++
               flags(opts, [:init, :step, :max_steps, :max_samples]) ++
-              ["--invariant=not(#{name})", "--out-itf=#{out}"]
+              backend_args(model) ++ ["--invariant=not(#{name})", "--out-itf=#{out}"]
 
           %{kind: :witness, name: name, cmd: cmd, args: args, out: out}
         end)
@@ -110,7 +110,7 @@ defmodule AshQuint.Gen do
 
         args =
           ["test", model.tests, "--main=#{opts[:main]}"] ++
-            flags(opts, [:match]) ++ [seed, "--out-itf=#{out}"]
+            flags(opts, [:match]) ++ [seed] ++ backend_args(model) ++ ["--out-itf=#{out}"]
 
         [%{kind: :scenario, name: nil, cmd: cmd, args: args, out: out}]
       else
@@ -158,8 +158,18 @@ defmodule AshQuint.Gen do
 
     ["run", model.model, "--main=#{opts[:main]}", "--seed=#{seed}"] ++
       flags(opts, [:init, :step, :max_steps, :max_samples, :n_traces]) ++
-      ["--out-itf=#{out}"]
+      backend_args(model) ++ ["--out-itf=#{out}"]
   end
+
+  @doc """
+  The `--backend` flag for `model`'s configured simulator backend (see
+  `AshQuint.Config`): `["--backend=<backend>"]`, or `[]` when it's unset.
+  `commands/3` and `random_args/3` add it to every `quint run` and
+  `quint test`; `interface_command/3` never does.
+  """
+  @spec backend_args(Model.t()) :: [String.t()]
+  def backend_args(%Model{backend: nil}), do: []
+  def backend_args(%Model{backend: backend}), do: ["--backend=#{backend}"]
 
   defp flags(opts, keys) do
     for key <- keys, value = opts[key], value != nil do
@@ -407,6 +417,7 @@ defmodule AshQuint.Gen do
     manifest = %Manifest{
       interface: interface,
       quint: config.quint,
+      backend: model.backend,
       seed: model.seed,
       models: Map.new(paths, &{&1, Manifest.hash_file(Path.join(config.root, &1))}),
       traces: entries ++ regression_entries

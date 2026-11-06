@@ -313,6 +313,90 @@ defmodule AshQuint.GenTest do
     end
   end
 
+  describe "commands/3 with a backend" do
+    test "commands/3 passes --backend to run, witness and scenario commands when set", %{
+      tmp_dir: tmp_dir
+    } do
+      config = config(tmp_dir, backend: "rust")
+      commands = Gen.commands(config, config.models.counter, "/t")
+
+      assert Enum.map(commands, & &1.kind) == [:random, :witness, :scenario]
+
+      for %{args: args} <- commands do
+        assert Enum.count(args, &(&1 == "--backend=rust")) == 1
+        backend = Enum.find_index(args, &(&1 == "--backend=rust"))
+        assert backend < Enum.find_index(args, &String.starts_with?(&1, "--out-itf="))
+
+        if invariant = Enum.find_index(args, &String.starts_with?(&1, "--invariant=")) do
+          assert backend < invariant
+        end
+      end
+
+      assert [_random, %{args: witness}, %{args: scenario}] = commands
+
+      assert witness == [
+               "run",
+               @model_file,
+               "--main=counter",
+               "--seed=7",
+               "--max-steps=6",
+               "--max-samples=100",
+               "--backend=rust",
+               "--invariant=not(witA)",
+               "--out-itf=/t/witness_witA.itf.json"
+             ]
+
+      assert scenario == [
+               "test",
+               @tests_file,
+               "--main=tests",
+               "--match=Test$",
+               "--seed=7",
+               "--backend=rust",
+               "--out-itf=/t/scenario_{test}_{seq}.itf.json"
+             ]
+    end
+
+    test "commands/3 passes no --backend when unset", %{tmp_dir: tmp_dir} do
+      config = config(tmp_dir)
+
+      for %{args: args} <- Gen.commands(config, config.models.counter, "/t") do
+        refute Enum.any?(args, &String.starts_with?(&1, "--backend"))
+      end
+    end
+
+    test "interface_command/3 never passes --backend", %{tmp_dir: tmp_dir} do
+      config = config(tmp_dir, backend: "rust")
+      %{args: args} = Gen.interface_command(config, config.models.counter, "/o")
+
+      refute Enum.any?(args, &String.starts_with?(&1, "--backend"))
+    end
+
+    test "random_args/3 includes the backend", %{tmp_dir: tmp_dir} do
+      model = config(tmp_dir, backend: "typescript").models.counter
+
+      assert Gen.random_args(model, 5, out: "x") == [
+               "run",
+               @model_file,
+               "--main=counter",
+               "--seed=5",
+               "--max-steps=5",
+               "--max-samples=20",
+               "--n-traces=2",
+               "--backend=typescript",
+               "--out-itf=x"
+             ]
+    end
+
+    test "backend_args/1 is the --backend flag, or nothing", %{tmp_dir: tmp_dir} do
+      assert Gen.backend_args(config(tmp_dir, backend: "rust").models.counter) == [
+               "--backend=rust"
+             ]
+
+      assert Gen.backend_args(config(tmp_dir).models.counter) == []
+    end
+  end
+
   describe "interface_command/3" do
     test "the interface command uses random's main and the model file", %{tmp_dir: tmp_dir} do
       config = config(tmp_dir)
@@ -413,6 +497,22 @@ defmodule AshQuint.GenTest do
              }
 
       assert manifest == Manifest.encode(Manifest.decode!(manifest, "manifest.json"))
+    end
+
+    test "generate/3 records the model's backend in the manifest", %{root: root, tmp: tmp} do
+      config = config(root, backend: "rust")
+
+      assert {:ok, %{counter: %{manifest: manifest}}} =
+               Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp)
+
+      assert Jason.decode!(manifest)["backend"] == "rust"
+
+      config = config(root)
+
+      assert {:ok, %{counter: %{manifest: manifest}}} =
+               Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp)
+
+      refute Map.has_key?(Jason.decode!(manifest), "backend")
     end
 
     test "compiles after the traces and records the interface", %{root: root, tmp: tmp} do

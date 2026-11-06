@@ -291,6 +291,38 @@ defmodule AshQuint.ManifestTest do
     |> Jason.encode!()
   end
 
+  describe "backend" do
+    test "encode/1 writes backend when set" do
+      json = Jason.decode!(Manifest.encode(%{manifest(@entries) | backend: "rust"}))
+
+      assert json["backend"] == "rust"
+      assert json["ash_quint"] == 3
+    end
+
+    test "encode/1 omits backend when unset" do
+      refute Map.has_key?(Jason.decode!(Manifest.encode(manifest(@entries))), "backend")
+    end
+
+    test "decode!/2 round-trips backend" do
+      encoded = Manifest.encode(%{manifest(@entries) | backend: "rust"})
+
+      assert Manifest.decode!(encoded, @path).backend == "rust"
+      assert Manifest.decode!(Manifest.encode(manifest(@entries)), @path).backend == nil
+      assert Manifest.decode!(json(%{"backend" => "typescript"}), @path).backend == "typescript"
+      assert Manifest.decode!(json(%{}), @path).backend == nil
+    end
+
+    test "decode!/2 refuses a non-string backend" do
+      assert_raise ArgumentError, "#{@path}: invalid manifest: backend must be a string", fn ->
+        Manifest.decode!(json(%{"backend" => 1}), @path)
+      end
+
+      assert_raise ArgumentError, "#{@path}: invalid manifest: backend must be a string", fn ->
+        Manifest.decode!(json(%{"backend" => nil}), @path)
+      end
+    end
+  end
+
   test "decodes a version 2 manifest with outcomes" do
     manifest = Manifest.decode!(json(%{}), @path)
 

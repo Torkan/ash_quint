@@ -106,6 +106,17 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
     assert infos() == ["ash_quint.promote: counter: added regression_4031_2.itf.json (10 steps)"]
   end
 
+  test "promote keeps the manifest's backend", %{root: root} do
+    path = Path.join(root, @manifest)
+    json = path |> File.read!() |> Jason.decode!() |> Map.put("backend", "rust")
+    File.write!(path, Jason.encode!(json))
+
+    promote(root, [candidate(root, "a.itf.json")])
+
+    assert Jason.decode!(File.read!(path))["backend"] == "rust"
+    assert Manifest.read!(path).backend == "rust"
+  end
+
   test "promotes several candidates", %{root: root} do
     a = candidate(root, "a.itf.json")
     b = candidate(root, "b.itf.json", %{"seed" => 9, "index" => 0})

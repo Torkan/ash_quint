@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Simulator backend: `backend: "rust" | "typescript"` in `ash_quint.exs`,
+  at the top level or per model, is passed as `--backend` to every
+  `quint run` and `quint test` that gen and explore run (never to
+  `quint compile`), and recorded as an optional `backend` key in the
+  manifest (the format stays 3). Unset, nothing changes. The examples pin
+  `rust`, Quint 0.33.1's default. `AshQuint.Gen.backend_args/1` builds the
+  flag.
 - Adapter scaffold: `mix ash_quint.gen.adapter <model> [--adapter Module]
   [--force]` writes `test/support/<model>_trace.ex`, an adapter with a
   `step/2` clause per action binding its picks (`{:start, …}` and

@@ -2,6 +2,8 @@
 # traces with `MIX_ENV=test mix ash_quint.gen counter` (or `race`).
 [
   quint: "0.33.1",
+  # Pinned, so the traces don't change when Quint's default backend does.
+  backend: "rust",
   models: [
     counter: [
       model: "priv/examples/counter/model.qnt",

@@ -404,6 +404,42 @@ defmodule AshQuint.ConfigTest do
     )
   end
 
+  describe "backend" do
+    test "backend defaults to unset" do
+      config = validate(minimal())
+
+      assert config.backend == nil
+      assert Enum.all?(Map.values(config.models), &(&1.backend == nil))
+    end
+
+    test "a model inherits the top-level backend" do
+      assert counter(minimal([], backend: "rust")).backend == "rust"
+    end
+
+    test "a model's backend overrides the top level" do
+      assert counter(minimal([backend: "typescript"], backend: "rust")).backend == "typescript"
+    end
+
+    test "an unknown backend is an error" do
+      assert_raises_config(
+        minimal([], backend: "java"),
+        ~s(ash_quint.exs: backend must be "rust" or "typescript", got "java")
+      )
+
+      assert_raises_config(
+        minimal(backend: "java"),
+        ~s(ash_quint.exs: models.counter.backend must be "rust" or "typescript", got "java")
+      )
+    end
+
+    test "a non-string backend is an error" do
+      assert_raises_config(
+        minimal([], backend: :rust),
+        ~s(ash_quint.exs: backend must be "rust" or "typescript", got :rust)
+      )
+    end
+  end
+
   test "quint_cmd substitutes the version" do
     assert Config.quint_cmd(validate(minimal())) == [
              "npx",

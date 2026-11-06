@@ -10,12 +10,14 @@ defmodule AshQuint.Config do
         model_dir: "test/quint",
         fixture_dir: "test/fixtures/quint",
         on_missing_model: :fail,                          # or :skip
+        backend: "rust",                                  # or "typescript"; default: unset
         models: [
           counter: [
             model: "test/quint/counter/model.qnt",        # default: <model_dir>/<name>/model.qnt
             tests: "test/quint/counter/model-tests.qnt",  # default: <model_dir>/<name>/model-tests.qnt
             out: "test/fixtures/quint/counter",           # default: <fixture_dir>/<name>
             on_missing_model: :fail,                      # default: the top-level setting
+            backend: "rust",                              # default: the top-level setting
             seed: 1,                                      # required
             action_path: ["lastAction"],
             result_path: ["lastResult"],
@@ -31,7 +33,9 @@ defmodule AshQuint.Config do
         ]
       ]
 
-  Each `main` is the name of a Quint module: the model's for `random` and
+  `backend` is the Quint simulator backend, passed as `--backend` to every
+  `quint run` and `quint test`; unset, Quint picks its own default. Each
+  `main` is the name of a Quint module: the model's for `random` and
   `witnesses`, the tests file's for `scenarios`. Each model needs at least
   one of `random`, `witnesses` and `scenarios`. Unknown and duplicate keys
   are errors. Paths, the defaults built from a model's name included, must
@@ -49,10 +53,13 @@ defmodule AshQuint.Config do
             model_dir: "test/quint",
             fixture_dir: "test/fixtures/quint",
             on_missing_model: :fail,
+            backend: nil,
             root: nil,
             models: %{}
 
   @type on_missing_model :: :fail | :skip
+
+  @type backend :: String.t()
 
   @type t :: %__MODULE__{
           quint: String.t(),
@@ -60,6 +67,7 @@ defmodule AshQuint.Config do
           model_dir: String.t(),
           fixture_dir: String.t(),
           on_missing_model: on_missing_model(),
+          backend: backend() | nil,
           root: String.t(),
           models: %{atom() => Model.t()}
         }
@@ -70,6 +78,7 @@ defmodule AshQuint.Config do
     model_dir: :path,
     fixture_dir: :path,
     on_missing_model: :on_missing_model,
+    backend: :backend,
     models: :models
   ]
 
@@ -78,6 +87,7 @@ defmodule AshQuint.Config do
     tests: :path,
     out: :path,
     on_missing_model: :on_missing_model,
+    backend: :backend,
     seed: :integer,
     action_path: :strings,
     result_path: :strings,
@@ -206,7 +216,8 @@ defmodule AshQuint.Config do
           model: Path.join([top.model_dir, dir, "model.qnt"]),
           tests: Path.join([top.model_dir, dir, "model-tests.qnt"]),
           out: Path.join(top.fixture_dir, dir),
-          on_missing_model: top.on_missing_model
+          on_missing_model: top.on_missing_model,
+          backend: top.backend
         ] ++ opts
       )
 
@@ -285,6 +296,11 @@ defmodule AshQuint.Config do
   defp check!(:on_missing_model, value, path, _root),
     do: type_error!(path, ":fail or :skip", value)
 
+  defp check!(:backend, value, _path, _root) when value in ["rust", "typescript"], do: :ok
+
+  defp check!(:backend, value, path, _root),
+    do: type_error!(path, ~s("rust" or "typescript"), value)
+
   defp check!(:models, value, path, _root) do
     unless value != [] and is_list(value) and Keyword.keyword?(value) do
       type_error!(path, "a non-empty keyword list", value)
@@ -351,6 +367,7 @@ defmodule AshQuint.Config.Model do
             tests: nil,
             out: nil,
             on_missing_model: :fail,
+            backend: nil,
             seed: nil,
             action_path: ["lastAction"],
             result_path: ["lastResult"],
@@ -367,6 +384,7 @@ defmodule AshQuint.Config.Model do
           tests: String.t(),
           out: String.t(),
           on_missing_model: AshQuint.Config.on_missing_model(),
+          backend: AshQuint.Config.backend() | nil,
           seed: integer(),
           action_path: [String.t()],
           result_path: [String.t()],

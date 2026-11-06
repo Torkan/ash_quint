@@ -5,6 +5,7 @@ defmodule AshQuint.Manifest do
 
       {
         "ash_quint": 3,
+        "backend": "rust",
         "interface": {
           "actions": [
             { "name": "Init", "picks": "unit" },
@@ -57,6 +58,12 @@ defmodule AshQuint.Manifest do
   for entries that have one and is optional on read; when present it must
   be an integer.
 
+  `backend` is the Quint simulator backend the traces were generated with
+  (`backend:` in `ash_quint.exs`, see `AshQuint.Config`). It's written
+  only when one is configured and is optional on read, in every format
+  version; when present it must be a string. Readers that don't know it
+  ignore it, so it doesn't change the format version.
+
   The encoding is deterministic: keys sorted at every level, traces sorted by
   file name, no timestamps.
 
@@ -76,7 +83,13 @@ defmodule AshQuint.Manifest do
   @versions [1, 2, 3]
   @upgrade "upgrade ash_quint"
 
-  defstruct version: @version, quint: nil, seed: nil, models: %{}, traces: [], interface: nil
+  defstruct version: @version,
+            quint: nil,
+            backend: nil,
+            seed: nil,
+            models: %{},
+            traces: [],
+            interface: nil
 
   @type outcomes :: %{String.t() => %{String.t() => pos_integer()}}
 
@@ -96,6 +109,7 @@ defmodule AshQuint.Manifest do
           version: 1 | 2 | 3,
           interface: AshQuint.Interface.t() | nil,
           quint: String.t(),
+          backend: String.t() | nil,
           seed: integer(),
           models: %{String.t() => String.t()},
           traces: [entry()]
@@ -145,17 +159,23 @@ defmodule AshQuint.Manifest do
       end)
 
     json =
-      ordered(%{
+      %{
         "ash_quint" => @version,
         "interface" => Interface.to_json(manifest.interface),
         "models" => ordered(manifest.models),
         "quint" => manifest.quint,
         "seed" => manifest.seed,
         "traces" => traces
-      })
+      }
+      |> Map.merge(backend(manifest))
+      |> ordered()
 
     Jason.encode!(json, pretty: true) <> "\n"
   end
+
+  # Written only when set, so manifests without a backend don't change.
+  defp backend(%{backend: nil}), do: %{}
+  defp backend(%{backend: backend}), do: %{"backend" => backend}
 
   defp encode_outcomes(%{outcomes: outcomes}) when is_map(outcomes) do
     outcomes |> Map.new(fn {action, labels} -> {action, ordered(labels)} end) |> ordered()
@@ -275,6 +295,11 @@ defmodule AshQuint.Manifest do
 
   defp from_json(json, version, path) do
     quint = field!(json, "quint", &is_binary/1, "a string", path)
+
+    backend =
+      if Map.has_key?(json, "backend"),
+        do: field!(json, "backend", &is_binary/1, "a string", path)
+
     seed = field!(json, "seed", &is_integer/1, "an integer", path)
     models = field!(json, "models", &string_map?/1, "a map of strings", path)
     traces = field!(json, "traces", &is_list/1, "a list", path)
@@ -285,6 +310,7 @@ defmodule AshQuint.Manifest do
       version: version,
       interface: if(version >= 3, do: Interface.from_json!(Map.get(json, "interface"), path)),
       quint: quint,
+      backend: backend,
       seed: seed,
       models: models,
       traces: traces
