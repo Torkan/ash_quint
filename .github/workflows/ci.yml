@@ -40,10 +40,16 @@ jobs:
         if: matrix.latest
       - run: mix credo --strict
       - run: mix compile --force --warnings-as-errors
-      - run: mix test
+      # The adapter check warns while test files compile.
+      - run: mix test --warnings-as-errors
       - run: mix dialyzer
         if: matrix.latest
       - run: mix docs
+        if: matrix.latest
+        env:
+          MIX_ENV: dev
+      # usage_rules is a dev-only dependency and needs Elixir ~> 1.18.
+      - run: mix usage_rules.validate usage-rules.md usage-rules/*.md
         if: matrix.latest
         env:
           MIX_ENV: dev

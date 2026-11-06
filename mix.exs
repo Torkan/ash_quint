@@ -53,7 +53,9 @@ defmodule AshQuint.MixProject do
       {:ash_postgres, "~> 2.0", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      # Needs Elixir ~> 1.18; dev only, so the 1.17 floor applies to lib/.
+      {:usage_rules, "~> 1.3", only: :dev, runtime: false}
     ]
   end
 
@@ -76,7 +78,8 @@ defmodule AshQuint.MixProject do
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files:
-        ~w(lib priv/examples/counter priv/examples/race mix.exs README.md LICENSE CHANGELOG.md)
+        ~w(lib priv/examples/counter priv/examples/race mix.exs README.md LICENSE CHANGELOG.md
+           usage-rules.md usage-rules)
     ]
   end
 

@@ -10,9 +10,10 @@ Every change must leave these green:
 mix format --check-formatted
 mix credo --strict
 mix compile --force --warnings-as-errors
-mix test
+mix test --warnings-as-errors   # the adapter check warns while test files compile
 mix dialyzer
 mix docs            # no warnings
+mix usage_rules.validate usage-rules.md usage-rules/*.md
 ```
 
 Also, when traces, the example or packaging change:
@@ -21,7 +22,8 @@ Also, when traces, the example or packaging change:
 mix compile --force --warnings-as-errors   # with MIX_ENV=test too
 mix test --only quint_cli                  # needs Node
 MIX_ENV=test mix ash_quint.gen --check     # needs Node
-mix hex.build                              # no test/, config/, agent-plans/,
+mix hex.build                              # lists usage-rules.md and usage-rules/;
+                                           # no test/, config/, agent-plans/, models/,
                                            # priv/test_repo, priv/resource_snapshots
                                            # or root ash_quint.exs in the files
 ```
@@ -39,7 +41,8 @@ mix test.check_migrations
 - `AshQuint.ITF`, `AshQuint.Trace`, `AshQuint.Step` — ITF decoding, traces,
   steps.
 - `AshQuint.Adapter`, `AshQuint.Names`, `AshQuint.Replay` — the adapter
-  behaviour and the replay; `AshQuint.Replay.Ops` (internal) — the ops in
+  behaviour (`project/1` optional; `postconditions/0`, checked after the
+  state comparison and the invariants) and the replay; `AshQuint.Replay.Ops` (internal) — the ops in
   flight during a concurrent replay; `AshQuint.Diff` (internal) — the
   differing entries of a long key mismatch.
 - `AshQuint.Gate` — gates (`checkpoint/1`, `put_info/2`,
@@ -70,7 +73,12 @@ mix test.check_migrations
 - `AshQuint.Coverage`, `Mix.Tasks.AshQuint.Coverage` — the action × outcome
   table of the committed manifests, `mix ash_quint.coverage` (also printed
   by `mix ash_quint.gen` after writing).
-- `AshQuint.Case` — compile-time test generation.
+- `AshQuint.Case` — compile-time test generation;
+  `AshQuint.Case.AdapterCheck` (internal) — the compile-time check of the
+  adapter's `step/2` clauses (from its debug info) against the manifest's
+  interface, warning at the `use` line. Its fixture adapters are in
+  `test/support/adapter_check_fixtures.ex` (compiled to beams, so they
+  carry debug info).
 - `AshQuint.Scaffold`, `Mix.Tasks.AshQuint.Gen.Adapter` — the adapter
   skeleton and test module source from a manifest's interface,
   `mix ash_quint.gen.adapter` (writes `test/support/<model>_trace.ex` and
@@ -94,7 +102,9 @@ mix test.check_migrations
 - `test/support/counter_adapter.ex` — the reference adapter, linked from the
   README, and `CounterAdapterOffByOne`, a broken one for the failure and
   explore tests; `test/support/toy_adapter.ex` — an in-memory adapter with
-  switchable faults for the Replay and Sensitivity tests;
+  switchable faults for the Replay and Sensitivity tests, plus
+  `PostconditionToyAdapter` (no `project/1`, postconditions, faults
+  `:blind_post` and `:raising_post`) for the light-adapter tests;
   `test/support/concurrent_toy_adapter.ex` — its concurrent counterpart
   (an Agent-backed counter, gates and a lock) for the concurrent replay
   tests, plus `ConcurrentToyAdapterBlind`, whose projection is blind until
@@ -105,6 +115,10 @@ mix test.check_migrations
   race example unboxed), `PgOpsAdapter` (per-op calls, for the sandbox
   tests) and `DataCase` (`async: true` for the shared sandbox,
   `unboxed: true` for real connections). Tests in `test/ash_quint/postgres/`.
+- `usage-rules.md`, `usage-rules/modeling.md`, `usage-rules/adapters.md` —
+  the packaged usage rules (`ash_quint`, `ash_quint:modeling`,
+  `ash_quint:adapters`), checked by `mix usage_rules.validate`; keep them
+  in step with the README (its "Modelling practices" cites the sources).
 
 ## Quint
 
@@ -145,7 +159,9 @@ mix test.check_migrations
 
 - **Elixir floor is ~> 1.17** (Ash 3 requires it), even when developing on a
   newer Elixir: use no APIs newer than 1.17 (no `JSON` module). Use `Jason`
-  for JSON.
+  for JSON. The floor applies to `lib/` and the test env; dev-only tools
+  may need newer Elixir (`usage_rules` needs ~> 1.18, so CI validates the
+  usage rules only in the 1.20 job's dev steps).
 - **No atoms from trace data:** model names, tags and keys stay strings.
 - Every public module and function gets `@moduledoc`/`@doc` and a `@spec`.
 - **Off-limits:** never edit, stage or commit `mise.toml` or `mise.local.toml`.

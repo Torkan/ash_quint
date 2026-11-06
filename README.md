@@ -101,8 +101,10 @@ Some things to know about Quint 0.33.1 when writing a model:
 
 - `set`, `get` and `next` are reserved and can't name a variable or action
   (QNT101). The counter uses `inc`, `reset` and `peek`.
-- Model integers must fit in a signed 64-bit integer: the Rust evaluator
-  rejects anything larger (QNT600). Quint writes integers with |n| ≥ 10^15
+- Model integers must fit in a signed 64-bit integer: the Rust evaluator,
+  Quint 0.33.1's default backend, rejects anything larger (QNT600); the
+  TypeScript one doesn't (`backend: "typescript"`, see "Configuration").
+  Quint writes integers with |n| ≥ 10^15
   as bignumber.js objects rather than `#bigint`; ash_quint decodes both to
   integers.
 - `quint run` looks for actions named `init` and `step`. Name them
@@ -179,12 +181,15 @@ key, with its default:
   fixture_dir: "test/fixtures/quint",
   # :skip when model files aren't committed (see "The test case").
   on_missing_model: :fail,
+  # The Quint simulator backend, "rust" or "typescript"; default: unset.
+  backend: "rust",
   models: [
     counter: [
       model: "test/quint/counter/model.qnt",        # <model_dir>/<name>/model.qnt
       tests: "test/quint/counter/model-tests.qnt",  # <model_dir>/<name>/model-tests.qnt
       out: "test/fixtures/quint/counter",           # <fixture_dir>/<name>
       on_missing_model: :fail,                      # the top-level setting
+      backend: "rust",                              # the top-level setting
       seed: 20_261_102,                             # required
       action_path: ["lastAction"],
       result_path: ["lastResult"],
@@ -224,6 +229,14 @@ key, with its default:
 - Each model's `out` must be its own directory: not the project root, and
   not another model's `out`.
 - `tests` is used only when `scenarios` is set.
+- `backend`, when set, is passed as `--backend=<backend>` to every
+  `quint run` and `quint test` that gen and explore run (not to
+  `quint compile`) and recorded in the manifest. Unset, no flag is passed
+  and Quint picks its own default, which can change between Quint
+  versions and with it the traces. Pin it with the Quint version. Quint
+  0.33.1 defaults to `rust`, whose integers are signed 64-bit; a model
+  that needs larger integers pins `typescript`, whose integers are
+  unbounded (its traces differ from `rust`'s for the same seed).
 - Unknown keys, duplicate keys and wrongly typed values are errors that name
   the key, e.g. `ash_quint.exs: unknown key models.counter.random.invariants`.
 
@@ -1001,6 +1014,130 @@ list can't go stale. Actions that only ever return
 `Peek`). The `sensitivity:` value must be a literal: the lists can be
 written as `~w(plans)`, but not as module attributes or variables.
 
+## Modelling practices
+
+What follows is borrowed from Quint's own write-ups on model-based testing
+and specification, mapped to ash_quint. None of it is enforced; the
+library's checks (the replays, sensitivity, the adapter check, explore)
+are what make the practices pay off.
+
+**Model what the code does, bugs included.** "The model's job is to
+faithfully represent what the code does, including its rounding choices
+and its mistakes" ([Balancer](https://quint.sh/posts/balancerbug)). A
+replay checks that the system does what the model says, so a model of the
+intended behaviour fails on the bug at a replay step, while a model of the
+actual behaviour lets Quint name the bug as a violated invariant. Fix the
+model with the code, and regenerate: the staleness test fails until you
+do, and explore and promoted regression traces keep both in step.
+
+**One invariant per property.** Each property its own named invariant,
+in the model and in the adapter's `invariants/0` (the counter's
+`countsWithinLimit` and `counts_within_limit`): a tighter invariant gives
+a shorter violating trace, and the failure says which property broke
+([MonadBFT](https://quint.sh/posts/monadbft) checks each supporting lemma
+as a separate invariant).
+
+**Storage consistency.** A cached or stored value must stay faithful to
+what it represents; Balancer's invariant compares a stored value with one
+recomputed from its sources. In Ash that is a stored attribute against an
+aggregate or calculation over its source, checked by an adapter invariant
+that loads both:
+
+```elixir
+# In the resource: aggregates do sum :entries_total, :entries, :amount, default: 0 end
+require Ash.Query
+
+@impl true
+def invariants, do: [balance_matches_entries: &balance_matches_entries/2]
+
+defp balance_matches_entries(_projected, ctx) do
+  MyApp.Account
+  |> Ash.Query.filter(id in ^ctx.ids)
+  |> Ash.Query.load(:entries_total)
+  |> Ash.read!()
+  |> Enum.find_value(:ok, fn account ->
+    if account.balance != account.entries_total,
+      do: {:error, "#{account.id}: balance #{account.balance}, entries #{account.entries_total}"}
+  end)
+end
+```
+
+The invariant reads the system, not the projection, so it holds the
+system to a property the model needn't spell out.
+
+**Check that an invariant is specific.** Balancer confirms its invariant
+catches the bug, not "any exit", by running a step without the buggy path
+and expecting no violation
+(`quint run model.qnt --invariant=inv --step=stepClean`). The converse
+validates the model: [Reliable Software in the LLM
+Era](https://quint.sh/posts/llm_era) specifies a version with too many
+faulty nodes and expects the property to break. ash_quint's `random:`
+takes no invariant (see [Limitations](#limitations)), so run these
+yourself.
+
+**Honest and malicious actions side by side.**
+[Zerocash](https://quint.sh/posts/zerocash) puts a malicious action next to
+its honest version, through the same validation, and picks the mix with
+`--step` (`--step=faerie_gold_step`). In ash_quint, `random: [step: …]` and
+`witnesses: [step: …]` choose the step the traces come from, and explore
+uses `random:`'s.
+
+**Failures as actions.** [Emerald](https://quint.sh/posts/quint_connect_emerald)
+models process restarts and data corruption as spec actions, replayed as
+adversarial scenarios; in MonadBFT, Byzantine validators take adversarial
+actions like any other. Add them to the model's `Action` type
+(`Restart`, `LoseWrite`), and have `step/2` make them happen: kill a
+process, roll back a transaction, delete a row behind the system's back.
+
+**Witnesses for reachability.** Witnesses are written as negated
+invariants, so a violation proves a state reachable
+([cognitive debt](https://quint.sh/posts/cognitive_debt)). One per key
+scenario in `witnesses: [names: …]` gives a committed trace that reaches
+it. Explore reports how often fresh traces reach each witness
+(`quint run --witnesses`); one that reads `never` is a scenario the random
+traces don't test, and the coverage table shows the outcomes no trace
+reaches.
+
+**Runs as scenarios.** A `run` is a sequence of concrete steps, "like a
+high-level integration test" (cognitive debt). Put them in
+`model-tests.qnt` and list them under `scenarios:`; Emerald keeps its most
+interesting scenarios in the codebase as Quint runs. A failure explore
+finds is kept the same way, as a promoted regression trace (see
+"Regression traces").
+
+**Postconditions for light models.** Neutron's model was "lightweight and
+nimble": correctness was checked by postconditions on the executed
+actions ([Neutron](https://quint.sh/posts/neutron-mbt)). An adapter can do
+the same with `postconditions/0` and no `project/1` (see "Writing an
+adapter"); sensitivity then drops one accepted call per action to check
+that a postcondition notices.
+
+**Model-based testing complements other tests.** From Interchain
+Security's MBT setup: "MBT cannot replace diligent unit and end-to-end
+testing, but it can add value to them"
+([tests/mbt](https://github.com/cosmos/interchain-security/blob/main/tests/mbt/README.md)).
+Keep the unit tests for validation, authorization and error messages, which
+a model abstracts away.
+
+**Let an agent draft, let the tools decide.** "LLMs don't think, they
+translate. Quint's deterministic tools do the reasoning" (LLM era), and
+the spec is validated (reachability, the over-faulty variant) before the
+code is generated from it. Quint Connect's driver library was designed to
+work with LLMs: "The Quint Connect library will tell you what's missing"
+([Quint Connect](https://quint.sh/posts/quint_connect)). In ash_quint,
+`mix ash_quint.gen.adapter` writes the skeleton, the adapter check warns
+about actions and picks the adapter gets wrong, and a failure names the
+model step and, for a trace explore found, the command that regenerates
+it. Trust what an agent
+drafts only once `quint typecheck`, `quint test` and `quint run` pass on
+the model and the replays and sensitivity pass on the adapter. In the
+[OpenHands race](https://quint.sh/posts/racecondition), an agent drafted
+the fix and checking it against the Quint model showed it incomplete.
+
+**Pin the backend and the Quint version.** `quint:` and `backend:` in
+`ash_quint.exs` (see "Configuration") keep the traces reproducible, and
+`mix ash_quint.gen --check` in CI shows when they no longer are.
+
 ## Exploring: `mix ash_quint.explore`
 
 The committed traces are a fixed sample. Exploring replays fresh ones:
@@ -1242,7 +1379,9 @@ and its module,
 
 ## CI
 
-- The default test suite needs neither Node nor Quint: run `mix test`.
+- The default test suite needs neither Node nor Quint: run
+  `mix test --warnings-as-errors`, so the adapter check's warnings (see
+  "The test case") fail the build.
 - Exploring isn't meant for CI by default: it tries new traces each run,
   so a failure depends on the seed. Run it locally, or in a scheduled
   job with Node (`MIX_ENV=test mix ash_quint.explore --budget 600`), and
@@ -1276,7 +1415,8 @@ and its module,
   (see [Databases](#databases)).
 - `random:` takes no invariants to check; any non-zero exit of
   `quint run` fails generation.
-- Model integers are limited to the signed 64-bit range by Quint.
+- Model integers are limited to the signed 64-bit range by Quint's Rust
+  backend; larger ones need `backend: "typescript"`.
 
 ## License
 

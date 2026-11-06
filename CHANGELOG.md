@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Docs: a README section "Modelling practices" (from Quint's write-ups on
+  model-based testing, mapped to ash_quint), `backend:` in the README's
+  configuration, and usage rules for agents, packaged with the library:
+  `usage-rules.md`, `usage-rules/modeling.md` (`ash_quint:modeling`) and
+  `usage-rules/adapters.md` (`ash_quint:adapters`).
 - Postconditions: a new optional adapter callback `postconditions/0`
   returns `[{name, fun}]`; `fun.(ctx, step)` returns `:ok` or
   `{:error, message}`, and runs on every synced step (not after
