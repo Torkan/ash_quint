@@ -25,23 +25,28 @@ The worked example is the `counter` model: the model and its traces are in
 
 ## Installation
 
-ash_quint needs Elixir 1.17 or later. Add it to your test dependencies in
-`mix.exs`:
+ash_quint needs Elixir 1.17 or later. Add it to your dev and test
+dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:ash_quint, "~> 0.1", only: :test}
+    {:ash_quint, "~> 0.1", only: [:dev, :test]}
   ]
 end
 ```
 
+`only: :test` works for testing too, but hides ash_quint's usage rules for
+coding agents (`usage-rules.md` and `usage-rules/`, packaged with the
+library) from `mix usage_rules.sync`, which runs in dev.
+
 Ash is optional: `AshQuint.Ash` and the Ash-aware default `outcome/1` are
 there only when your project depends on `ash`.
 
-Since ash_quint is a test-only dependency, its Mix tasks exist only under
-`MIX_ENV=test`. Either run them as `MIX_ENV=test mix ash_quint.gen`, or
-make `test` their preferred environment in `mix.exs`:
+Run its Mix tasks under `MIX_ENV=test` (explore runs your tests, and
+promote reads the candidates explore wrote under `_build/test`). Either
+run them as `MIX_ENV=test mix ash_quint.gen`, or make `test` their
+preferred environment in `mix.exs`:
 
 ```elixir
 def cli do
@@ -671,7 +676,7 @@ end
 ```
 
 Outside an op task it returns `:ok` at once, so it can stay in code that
-compiles for test (ash_quint is a test-only dependency: put it behind
+compiles for test (ash_quint isn't a production dependency: put it behind
 `if Mix.env() == :test`, or in a test-only change). Inside one, it waits for
 the replay. Processes the call starts with `Task` gate their op too, since
 the gate looks up `$callers`. Gate names are your own atoms (or tuples).
@@ -867,13 +872,15 @@ failure at step 0 has none. A regression trace with provenance (see
 `trace:` line:
 
 ```
-quint: npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --witnesses witOverLimit witResetAfterInc --out-itf=explore_{seq}.itf.json (trace 2)
+quint: npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --witnesses witOverLimit witResetAfterInc '--out-itf=explore_{seq}.itf.json' (trace 2)
 ```
 
 `(trace 2)` is the trace's place among the run's outputs
-(`explore_2.itf.json`). Words with characters outside
-`[A-Za-z0-9_./=:@{},+-]` are single-quoted. A shrunk regression trace (see
-"Shrinking") then adds its steps as a Quint run:
+(`explore_2.itf.json`). The Quint version is the one the trace was
+explored with. Words with characters outside `[A-Za-z0-9_./=:@+-]` are
+single-quoted (braces and commas included, against brace expansion). A
+shrunk regression trace (see "Shrinking") then adds its steps as a Quint
+run:
 
 ```
 run:   init.then(inc("c1", 1))
@@ -978,8 +985,8 @@ each action none of whose calls changes the expected state (with no
 projection, every action) gets one more dropped call, at its first call
 whose model result is `Accepted`; the postconditions run on the skipped
 step, so one that sees the missing effect fails the replay and the action
-counts as tested. One that survives is reported, and the action stays
-untested (allow-listable like any other). Adapters without postconditions
+counts as tested. One that survives isn't reported as a survivor: the
+action stays untested (allow-listable like any other). Adapters without postconditions
 get exactly the mutants above.
 
 The test fails when a mutant survives, and when something is untested:
@@ -1083,9 +1090,9 @@ system to a property the model needn't spell out.
 
 **Check that an invariant is specific.** Balancer confirms its invariant
 catches the bug, not "any exit", by running a step without the buggy path
-and expecting no violation
-(`quint run model.qnt --invariant=inv --step=stepClean`). The converse
-validates the model: [Reliable Software in the LLM
+and expecting no violation (`--step=stepWethOnly` in the post; for your
+model, say, `quint run model.qnt --invariant=inv --step=stepClean`). The
+converse validates the model: [Reliable Software in the LLM
 Era](https://quint.sh/posts/llm_era) specifies a version with too many
 faulty nodes and expects the property to break. ash_quint's `random:`
 takes no invariant (see [Limitations](#limitations)), so run these
@@ -1105,12 +1112,15 @@ actions like any other. Add them to the model's `Action` type
 (`Restart`, `LoseWrite`), and have `step/2` make them happen: kill a
 process, roll back a transaction, delete a row behind the system's back.
 
-**Witnesses for reachability.** Witnesses are written as negated
+**Witnesses for reachability.** The post writes witnesses as negated
 invariants, so a violation proves a state reachable
-([cognitive debt](https://quint.sh/posts/cognitive_debt)). One per key
-scenario in `witnesses: [names: …]` gives a committed trace that reaches
-it. Explore reports how often fresh traces reach each witness
-(`quint run --witnesses`); one that reads `never` is a scenario the random
+([cognitive debt](https://quint.sh/posts/cognitive_debt)). In ash_quint
+you write the reached-state predicate itself; gen negates it
+(`--invariant=not(<name>)`). One per key scenario in
+`witnesses: [names: …]` gives a committed trace that reaches it. Explore
+reports how often fresh traces reach each witness
+(`quint run --witnesses`, which counts the traces where the predicate
+holds); one that reads `never` is a scenario the random
 traces don't test, and the coverage table shows the outcomes no trace
 reaches.
 
@@ -1256,7 +1266,7 @@ counter regression 4031_2, step 5 (Inc), seed 4031: key "counts":
   actual:   %{"c1" => 4}
 model step: Inc %{"by" => 1, "ctr" => "c1"}, result :accepted
 candidate: _build/test/ash_quint/explore/counter/regression_4031_2.itf.json (cut to 5 steps)
-quint:     npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --witnesses witOverLimit witResetAfterInc --out-itf=explore_{seq}.itf.json (trace 2)
+quint:     npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --witnesses witOverLimit witResetAfterInc '--out-itf=explore_{seq}.itf.json' (trace 2)
 promote:   MIX_ENV=test mix ash_quint.promote _build/test/ash_quint/explore/counter/regression_4031_2.itf.json
 ```
 
@@ -1305,7 +1315,12 @@ passes is a model trace; the first whose replay still fails with the same
 action, at any step, is kept, cut after that step. The chunk halves when
 no reduction is kept, and the loop ends when no single step can be
 removed, or after `rounds` rounds (default 20). The kept trace is
-replayed once more and must fail with that action at its last step.
+replayed once more and must fail with that action at its last step. A
+round whose `quint test` writes no runs ends the loop early: the block
+adds `stopped:   quint test wrote no runs: <Quint's first line>` after
+the `shrunk from` line (or, with nothing kept yet, says `not shrunk:`
+with that reason). Shrinking never fails the session: if it raises, the
+candidate is written as confirmed (`not shrunk: shrinking raised: …`).
 
 How a step becomes a call:
 
@@ -1376,8 +1391,8 @@ where the gates are and on how the op tasks reach the database.
    the write. In an atomic action it gates while the changeset is built,
    before the transaction, so the data layer computes the atomic values
    from the row as it is when it writes. This is the most precise option
-   and the most invasive: ash_quint is a test-only dependency, so put the
-   change under `if Mix.env() == :test do … end`, or in a test-only
+   and the most invasive: ash_quint isn't a production dependency, so put
+   the change under `if Mix.env() == :test do … end`, or in a test-only
    resource or extension.
 2. **Telemetry gates**, attached by the adapter. Telemetry handlers run in
    the process that emits the event, so a gate on Ecto's query event stops

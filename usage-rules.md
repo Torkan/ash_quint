@@ -61,7 +61,9 @@ Sub-rules:
   ash_quint.gen`, `mix ash_quint.explore` and `mix ash_quint.promote` run
   Quint or write traces. Exclude `:quint_explore` in
   `test/test_helper.exs` (`ExUnit.start(exclude: [:quint_explore])`).
-- ash_quint is a test-only dependency: its Mix tasks run under
-  `MIX_ENV=test` (or set `preferred_envs` in `mix.exs`).
+- Depend on ash_quint with `only: [:dev, :test]`: with `only: :test`,
+  `mix usage_rules.sync` (which runs in dev) doesn't find these rules. Its
+  Mix tasks run under `MIX_ENV=test` (or set `preferred_envs` in
+  `mix.exs`).
 - Model names, action names, picks and variable names stay strings in
   Elixir; don't turn trace data into atoms.

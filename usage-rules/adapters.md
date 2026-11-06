@@ -37,8 +37,8 @@ action binding its picks and a `project/1` with every model variable.
   action none of whose calls changes the projected state (without
   `project/1`, every action) gets a dropped-call mutant at its first
   accepted call: a postcondition that notices the missing effect makes the
-  action tested; one that doesn't is reported, and the action stays
-  untested.
+  action tested; when none does, the action stays untested
+  (`allow_untested: [actions: …]` if that's deliberate).
 - An adapter with neither `project/1` nor postconditions checks outcomes
   and invariants only.
 

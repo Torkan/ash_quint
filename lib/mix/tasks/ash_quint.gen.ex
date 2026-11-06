@@ -39,8 +39,8 @@ defmodule Mix.Tasks.AshQuint.Gen do
   or a compile exiting non-zero all raise with Quint's output, as does an
   interface that can't be read from the compiled model.
 
-  `ash_quint` is usually a test-only dependency, so run the task as
-  `MIX_ENV=test mix ash_quint.gen`, or add
+  Run the task as `MIX_ENV=test mix ash_quint.gen` (the only way when
+  `ash_quint` is a test-only dependency), or add
   `def cli, do: [preferred_envs: ["ash_quint.gen": :test]]` to `mix.exs`.
   """
 

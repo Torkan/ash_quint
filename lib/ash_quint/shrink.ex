@@ -56,17 +56,17 @@ defmodule AshQuint.Shrink do
 
   @typedoc """
   A shrunk candidate: its step count, the rounds the loop ran (round 0
-  isn't counted), its run expression and the message of its confirmation
-  replay.
+  isn't counted), its run expression, the message of its confirmation
+  replay, and why the loop stopped early (`stopped`: a round's `quint
+  test` wrote no runs), `nil` when it ended by itself or on its budget.
   """
-  @type shrunk :: %{
+  @type result :: %{
           steps: non_neg_integer(),
           rounds: non_neg_integer(),
           run: String.t(),
-          message: String.t()
+          message: String.t(),
+          stopped: String.t() | nil
         }
-
-  @name ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/
 
   @doc """
   Renders one ITF JSON value (as `Jason.decode!/1` gives it) as a Quint
@@ -169,7 +169,7 @@ defmodule AshQuint.Shrink do
     end
   end
 
-  defp name?(name), do: is_binary(name) and name =~ @name
+  defp name?(name), do: Config.quint_name?(name)
 
   @doc """
   The calls of the steps 1..N of `itf`, a raw ITF trace (as
@@ -266,20 +266,19 @@ defmodule AshQuint.Shrink do
 
   defp operator(<<first::utf8, rest::binary>>), do: String.downcase(<<first::utf8>>) <> rest
 
-  @doc """
-  The run expression of `calls`: the model's init action
-  (`random: [init: …]`, default `init`) followed by `.then(call)` for each.
-  """
+  # The run expression of `calls`: the model's init action
+  # (`random: [init: …]`, default `init`) followed by `.then(call)` for
+  # each.
+  @doc false
   @spec run_expression(Model.t(), [String.t()]) :: String.t()
   def run_expression(%Model{} = model, calls) do
     init = (model.random || [])[:init] || "init"
     Enum.join([init | Enum.map(calls, &"then(#{&1})")], ".")
   end
 
-  @doc """
-  The import path of the model file `model` (absolute) from the directory
-  `dir` (absolute): relative, without `.qnt`, starting with `./` or `../`.
-  """
+  # The import path of the model file `model` (absolute) from the directory
+  # `dir` (absolute): relative, without `.qnt`, starting with `./` or `../`.
+  @doc false
   @spec import_path(Path.t(), Path.t()) :: String.t()
   def import_path(model, dir) do
     path = model |> Path.relative_to(dir, force: true) |> Path.rootname(".qnt")
@@ -288,8 +287,9 @@ defmodule AshQuint.Shrink do
 
   @doc """
   The wrapper module `ash_quint_shrink`: it imports the model's
-  `random: [main: …]` module from `import_path` (see `import_path/2`) and
-  declares one `run` per `{name, calls}`.
+  `random: [main: …]` module from `import_path` (relative to the
+  wrapper's directory, without `.qnt`) and declares one `run` per
+  `{name, calls}`.
   """
   @spec wrapper(Model.t(), String.t(), [{String.t(), [String.t()]}]) :: String.t()
   def wrapper(%Model{} = model, import_path, runs) do
@@ -320,14 +320,15 @@ defmodule AshQuint.Shrink do
        `#meta.source`, filtered with `keep?` and replayed in order; the
        first whose replay fails with `action`, at any step, is accepted,
        cut after that step. A round in which Quint writes no file at all
-       ends the loop.
+       ends the loop: with a reduction accepted, the result's `stopped`
+       says so; without, the candidate isn't shrunk.
     4. The last accepted reduction is replayed once more, and must fail
        with `action` at its last step.
 
   Returns the shrunk trace, or `{:not_shrunk, reason}`.
   """
   @spec shrink(binary(), String.t(), shrink_opts()) ::
-          {:ok, binary(), shrunk()} | {:not_shrunk, String.t()}
+          {:ok, binary(), result()} | {:not_shrunk, String.t()}
   def shrink(candidate, action, opts) do
     model = Keyword.fetch!(opts, :model)
     json = Jason.decode!(candidate)
@@ -413,16 +414,17 @@ defmodule AshQuint.Shrink do
 
   defp pad(list, length), do: list ++ List.duplicate(nil, length - length(list))
 
-  # Runs the loop until it's done, or a round writes no file; the last
-  # accepted reduction as {binary, positions}, or nil.
-  defp rounds(_session, %Loop{done: true} = loop, last), do: {loop, last}
+  # Runs the loop until it's done, or a round writes no file: {loop, the
+  # last accepted reduction as {binary, positions} or nil, why it stopped
+  # early or nil}.
+  defp rounds(_session, %Loop{done: true} = loop, last), do: {loop, last, nil}
 
   defp rounds(session, loop, last) do
     removals = Enum.map(Loop.removals(loop), &elem(&1, 1))
-    {_output, files} = quint_test(session, removals)
+    {output, files} = quint_test(session, removals)
 
     if Enum.all?(files, &is_nil/1) do
-      {loop, last}
+      {loop, last, "quint test wrote no runs: #{first_line(output)}"}
     else
       case accept(session, Enum.zip(removals, files)) do
         nil -> rounds(session, Loop.advance(loop, nil), last)
@@ -449,16 +451,19 @@ defmodule AshQuint.Shrink do
     end)
   end
 
-  defp confirm({_loop, nil}, _session), do: {:not_shrunk, "no step could be removed"}
+  defp confirm({_loop, nil, nil}, _session), do: {:not_shrunk, "no step could be removed"}
+  defp confirm({_loop, nil, stopped}, _session), do: {:not_shrunk, stopped}
 
-  defp confirm({loop, {binary, kept}}, session) do
+  defp confirm({loop, {binary, kept}, stopped}, session) do
     last = length(kept)
     action = session.action
 
     case session.replay.(binary) do
       {:failed, ^last, ^action, message} ->
         run = run_expression(session.model, Enum.map(kept, &Enum.at(session.calls, &1)))
-        {:ok, binary, %{steps: last, rounds: loop.rounds, run: run, message: message}}
+
+        {:ok, binary,
+         %{steps: last, rounds: loop.rounds, run: run, message: message, stopped: stopped}}
 
       _other ->
         {:not_shrunk, "did not reproduce"}

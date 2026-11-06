@@ -4,6 +4,7 @@ defmodule AshQuint.CaseTest do
   alias AshQuint.Test.{
     ConcurrentToyAdapter,
     ConcurrentToyAdapterBlind,
+    PostconditionToyAdapterBlind,
     ToyAdapter,
     ToyAdapterBlindReset,
     ToyAdapterConstant,
@@ -102,7 +103,7 @@ defmodule AshQuint.CaseTest do
                "trace: test/fixtures/case/promoted/regression_4031_2.itf.json",
                "quint: npx --yes @informalsystems/quint@0.33.1 run " <>
                  "test/fixtures/case/promoted/model.qnt --main=ok --seed=4031 " <>
-                 "--out-itf=explore_{seq}.itf.json (trace 2)"
+                 "'--out-itf=explore_{seq}.itf.json' (trace 2)"
              ]
     end
 
@@ -112,7 +113,7 @@ defmodule AshQuint.CaseTest do
                "trace: test/fixtures/case/shrink/regression_4031_2.itf.json",
                "quint: npx --yes @informalsystems/quint@0.33.1 run " <>
                  "test/fixtures/case/shrink/model.qnt --main=toy --seed=4031 " <>
-                 "--out-itf=explore_{seq}.itf.json (trace 2)",
+                 "'--out-itf=explore_{seq}.itf.json' (trace 2)",
                "run:   init.then(inc(1))"
              ]
     end
@@ -329,6 +330,15 @@ defmodule AshQuint.CaseTest do
              ToyAdapterConstant,
              ~s([allow_untested: [keys: ["limit"], actions: ["Inc"], vars: ["count"]]])
            ) == "sensitivity of :ok:\nno step of Reset changes the state"
+  end
+
+  test "allow_untested silences actions whose postcondition drop survives" do
+    assert sensitivity_failure(PostconditionToyAdapterBlind, "true") ==
+             "sensitivity of :ok:\nno step of Reset changes the state"
+
+    allowed = ~s([allow_untested: [actions: ["Reset"]]])
+    mod = compile_sensitivity(PostconditionToyAdapterBlind, allowed)
+    assert run_test(mod, "sensitivity of ok") == :ok
   end
 
   test "an unprojected variable fails the sensitivity test" do

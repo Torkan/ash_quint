@@ -359,7 +359,7 @@ defmodule AshQuint.ShrinkTest do
 
     test "shrinks to the failing step alone", %{tmp_dir: tmp_dir} do
       assert {:ok, binary, shrunk} = shrink(tmp_dir, 6, runner: runner([]), replay: replay([], 6))
-      assert %{steps: 1, run: "init.then(act(5))", message: "failed at 1"} = shrunk
+      assert %{steps: 1, run: "init.then(act(5))", message: "failed at 1", stopped: nil} = shrunk
       assert shrunk.rounds >= 1
 
       json = Jason.decode!(binary)
@@ -571,15 +571,27 @@ defmodule AshQuint.ShrinkTest do
     end
 
     test "a later round writing nothing stops the loop", %{tmp_dir: tmp_dir} do
-      runner = runner([], write: &(&1 <= 1))
+      runner = runner([], write: &(&1 <= 1), output: "\nerror: out of memory\nmore\n")
 
       assert {:ok, _binary, shrunk} =
                shrink(tmp_dir, 6, runner: runner, replay: replay([2, 3, 4], 6))
 
-      assert %{run: "init.then(act(2)).then(act(3)).then(act(4)).then(act(5))", rounds: 1} =
-               shrunk
+      assert %{
+               run: "init.then(act(2)).then(act(3)).then(act(4)).then(act(5))",
+               rounds: 1,
+               stopped: "quint test wrote no runs: error: out of memory"
+             } = shrunk
 
       assert length(quint_calls()) == 3
+    end
+
+    test "round 1 writing nothing isn't shrunk", %{tmp_dir: tmp_dir} do
+      runner = runner([], write: &(&1 == 0), output: "\nerror: out of memory\nmore\n")
+
+      assert shrink(tmp_dir, 6, runner: runner, replay: replay([], 6)) ==
+               {:not_shrunk, "quint test wrote no runs: error: out of memory"}
+
+      assert length(quint_calls()) == 2
     end
 
     test "flaky confirmation", %{tmp_dir: tmp_dir} do

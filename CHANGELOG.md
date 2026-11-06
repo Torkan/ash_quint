@@ -14,7 +14,13 @@
   single step can be removed or after `rounds` rounds (default 20). A
   shrunk candidate is the kept run's ITF, its provenance gains
   `shrunk` (`rounds`, `run`, `steps`), and the failure's message is its
-  own replay's. The failure block gains `shrunk from N to M steps (K
+  own replay's. A round whose `quint test` writes no runs stops the loop:
+  the last kept run is written with `stopped:   quint test wrote no
+  runs: <Quint's first line>` after the `shrunk from` line, or, with
+  none kept, the candidate isn't shrunk with that reason. Shrinking never
+  fails a session: an exception leaves the candidate unshrunk
+  (`not shrunk: shrinking raised: <message>`). `shrink: [apply: …]` must
+  be a Quint name. The failure block gains `shrunk from N to M steps (K
   rounds)` or `not shrunk: <reason>` after the candidate line and
   `run:       <run>` after `quint:`; the report's failures gain `shrunk`.
   A promoted shrunk trace's test prints `run:   <run>` after its `quint:`
@@ -26,7 +32,9 @@
   model-based testing, mapped to ash_quint), `backend:` in the README's
   configuration, and usage rules for agents, packaged with the library:
   `usage-rules.md`, `usage-rules/modeling.md` (`ash_quint:modeling`) and
-  `usage-rules/adapters.md` (`ash_quint:adapters`).
+  `usage-rules/adapters.md` (`ash_quint:adapters`). The README's install
+  line is now `only: [:dev, :test]`, since `mix usage_rules.sync` runs in
+  dev and doesn't see `only: :test` dependencies.
 - Postconditions: a new optional adapter callback `postconditions/0`
   returns `[{name, fun}]`; `fun.(ctx, step)` returns `:ok` or
   `{:error, message}`, and runs on every synced step (not after
@@ -41,8 +49,9 @@
   compared. The sensitivity check then tries no perturbed key and no
   `{:var, …}` check; an adapter with postconditions gets a dropped-call
   mutant, at its first accepted call, for each action whose calls never
-  change the expected state: detected, the action is tested; survived, the
-  mutant is reported and `{:call, action}` stays untested. Adapters
+  change the expected state: detected, the action is tested; survived,
+  `{:call, action}` stays untested (allow-listable; the mutant isn't
+  listed in `survived`). Adapters
   without postconditions get the same mutants as before.
 - Adapter check: with a format 3 manifest, `use AshQuint.Case` reads the
   adapter's `step/2` clauses from its debug info and warns at compile time
@@ -68,7 +77,10 @@
   `<model> <source> <name>, step <i> (<action>), seed <seed>: ` is
   unchanged. `AshQuint.Case` trace tests add `trace: <path>` and, for a
   regression trace with provenance, `quint: <command>`, a paste-ready
-  `quint run` that regenerates it (`AshQuint.Gen.quint_line/2`). An
+  `quint run` that regenerates it (`AshQuint.Gen.quint_line/2`), with the
+  Quint version recorded in the provenance and every word with a
+  character outside `[A-Za-z0-9_./=:@+-]` single-quoted (braces and
+  commas too, against brace expansion). An
   explore failure block prints the same `quint:` line before `promote:`,
   and `t:AshQuint.Explore.failure/0` gains `quint`.
 - Simulator backend: `backend: "rust" | "typescript"` in `ash_quint.exs`,

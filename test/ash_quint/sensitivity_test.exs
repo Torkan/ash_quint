@@ -54,6 +54,41 @@ defmodule AshQuint.SensitivityTest do
     defdelegate outcome(result), to: ToyAdapter
   end
 
+  defmodule MixedAdapter do
+    @moduledoc false
+    # The toy adapter (with its project/1) plus a postcondition reset_ran
+    # that checks step/2 ran for a Reset; blind with the :blind_post fault.
+    use AshQuint.Adapter
+
+    alias AshQuint.Step
+
+    @impl true
+    defdelegate init(trace, opts), to: ToyAdapter
+
+    @impl true
+    def step(ctx, %Step{action_taken: action} = step) do
+      with {:ok, result, ctx} <- ToyAdapter.step(ctx, step),
+           do: {:ok, result, Map.put(ctx, :last, action)}
+    end
+
+    @impl true
+    defdelegate project(ctx), to: ToyAdapter
+
+    @impl true
+    defdelegate outcome(result), to: ToyAdapter
+
+    @impl true
+    def postconditions, do: [reset_ran: &reset_ran/2]
+
+    defp reset_ran(ctx, %Step{action_taken: "Reset"}) do
+      if :blind_post in ctx.faults or ctx[:last] == "Reset",
+        do: :ok,
+        else: {:error, "step/2 didn't run"}
+    end
+
+    defp reset_ran(_ctx, _step), do: :ok
+  end
+
   defmodule BlindCommitAdapter do
     @moduledoc false
     # The toy adapter whose expected/2 takes a Commit's count from the
@@ -442,9 +477,27 @@ defmodule AshQuint.SensitivityTest do
     test "a postcondition blind to a dropped call leaves it untested" do
       assert check(PostconditionToyAdapter, [[init(), inc(1, 1), reset()]], [:blind_post]) == %{
                never_overlap: [],
-               survived: [{:drop, "random t", 1, "Inc"}, {:drop, "random t", 2, "Reset"}],
+               survived: [],
                untested: [{:call, "Inc"}, {:call, "Reset"}],
                tested: []
+             }
+    end
+
+    test "with project/1, only actions that never change the state get one" do
+      states = [init(), reset(), inc(1, 1)]
+
+      assert check(MixedAdapter, [states]) == %{
+               never_overlap: [],
+               survived: [],
+               untested: [],
+               tested: [{:key, "count"}, {:call, "Inc"}, {:call, "Reset"}, {:var, "count"}]
+             }
+
+      assert check(MixedAdapter, [states], [:blind_post]) == %{
+               never_overlap: [],
+               survived: [],
+               untested: [{:call, "Reset"}],
+               tested: [{:key, "count"}, {:call, "Inc"}, {:var, "count"}]
              }
     end
 
@@ -453,7 +506,7 @@ defmodule AshQuint.SensitivityTest do
 
       assert check(PostconditionToyAdapter, [states]) == %{
                never_overlap: [],
-               survived: [{:drop, "random t", 2, "Reset"}],
+               survived: [],
                untested: [{:call, "Inc"}, {:call, "Reset"}],
                tested: []
              }

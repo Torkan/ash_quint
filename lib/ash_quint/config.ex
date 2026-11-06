@@ -39,8 +39,8 @@ defmodule AshQuint.Config do
   `main` is the name of a Quint module: the model's for `random` and
   `witnesses`, the tests file's for `scenarios`. `shrink` turns on the
   shrinking of explore candidates (see `AshQuint.Shrink`): `true`, or a
-  keyword list with `apply` (a model action taking the action value, called
-  in place of each action's operator) and `rounds` (the budget of rounds,
+  keyword list with `apply` (the name of a model action taking the action
+  value, called in place of each action's operator) and `rounds` (the budget of rounds,
   default 20); `false` or unset is off. Each model needs at least
   one of `random`, `witnesses` and `scenarios`. Unknown and duplicate keys
   are errors. Paths, the defaults built from a model's name included, must
@@ -105,7 +105,9 @@ defmodule AshQuint.Config do
     shrink: :shrink
   ]
 
-  @shrink_keys [apply: :string, rounds: :pos_integer]
+  @shrink_keys [apply: :quint_name, rounds: :pos_integer]
+
+  @quint_name ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/
 
   @source_keys %{
     random: [
@@ -194,6 +196,12 @@ defmodule AshQuint.Config do
       end
     end)
   end
+
+  # A Quint identifier: a letter or underscore, then letters, digits and
+  # underscores.
+  @doc false
+  @spec quint_name?(term()) :: boolean()
+  def quint_name?(name), do: is_binary(name) and name =~ @quint_name
 
   @doc """
   The Quint command, with `{version}` replaced by the configured version in
@@ -286,6 +294,11 @@ defmodule AshQuint.Config do
 
   defp check!(:string, value, _path, _root) when is_binary(value), do: :ok
   defp check!(:string, value, path, _root), do: type_error!(path, "a string", value)
+
+  defp check!(:quint_name, value, path, root) do
+    check!(:string, value, path, root)
+    unless quint_name?(value), do: type_error!(path, "a Quint name", value)
+  end
 
   defp check!(:integer, value, _path, _root) when is_integer(value), do: :ok
   defp check!(:integer, value, path, _root), do: type_error!(path, "an integer", value)

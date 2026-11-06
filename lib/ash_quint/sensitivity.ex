@@ -59,8 +59,9 @@ defmodule AshQuint.Sensitivity do
   order) whose model result is `Accepted`: the postconditions run on the
   skipped step, so one that sees the missing effect fails the replay. A
   detected mutant tests the action (`{:call, action}`); one that survives
-  is listed in `survived` and the action stays untested. Adapters without
-  postconditions get only the mutants above.
+  isn't listed in `survived`: the action stays untested
+  (`{:call, action}`), so it can be allow-listed like any other. Adapters
+  without postconditions get only the mutants above.
 
   Every mutant replays with a fresh `init/2`, so fresh `AshQuint.Names`, in
   the caller's process and sandbox, one after another. The adapter's
@@ -151,7 +152,8 @@ defmodule AshQuint.Sensitivity do
           do: {{:call, action}, {trace, {:drop, Trace.label(trace), index, action}}}
   end
 
-  # Replays every mutant. Returns the survivors, the targets they test (a
+  # Replays every mutant. Returns the survivors (a postcondition mutant
+  # never: its action stays untested instead), the targets they test (a
   # postcondition mutant only when detected) and the actions whose
   # postcondition mutant was detected.
   defp try_mutants(adapter, mutants, post_drops, opts) do
@@ -161,7 +163,7 @@ defmodule AshQuint.Sensitivity do
 
     post? = fn target -> match?({:call, action} when is_map_key(post_drops, action), target) end
 
-    {for({_target, mutant, false} <- tried, do: mutant),
+    {for({target, mutant, false} <- tried, not post?.(target), do: mutant),
      for({target, _mutant, detected} <- tried, detected or not post?.(target), do: target),
      for({{:call, action} = target, _mutant, true} <- tried, post?.(target), do: action)}
   end

@@ -483,6 +483,17 @@ defmodule AshQuint.ConfigTest do
       )
     end
 
+    test "shrink: apply must be a Quint name" do
+      for name <- ["apply ", "", "1apply", "my.apply", "a-b"] do
+        assert_raises_config(
+          minimal(shrink: [apply: name]),
+          "ash_quint.exs: models.counter.shrink.apply must be a Quint name, got #{inspect(name)}"
+        )
+      end
+
+      assert counter(minimal(shrink: [apply: "_apply2"])).shrink == [apply: "_apply2"]
+    end
+
     test "shrink: of another type is an error" do
       assert_raises_config(
         minimal(shrink: 1),

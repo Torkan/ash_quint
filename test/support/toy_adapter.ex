@@ -329,3 +329,29 @@ defmodule AshQuint.Test.PostconditionToyAdapter do
     end
   end
 end
+
+defmodule AshQuint.Test.PostconditionToyAdapterBlind do
+  @moduledoc false
+  # PostconditionToyAdapter whose postcondition always returns :ok, so a
+  # dropped call goes unnoticed.
+  use AshQuint.Adapter
+
+  alias AshQuint.Test.PostconditionToyAdapter
+
+  @impl true
+  def init(trace, opts) do
+    PostconditionToyAdapter.init(
+      trace,
+      Keyword.update(opts, :faults, [:blind_post], &[:blind_post | &1])
+    )
+  end
+
+  @impl true
+  defdelegate step(ctx, step), to: PostconditionToyAdapter
+
+  @impl true
+  defdelegate outcome(result), to: PostconditionToyAdapter
+
+  @impl true
+  defdelegate postconditions, to: PostconditionToyAdapter
+end

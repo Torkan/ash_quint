@@ -950,15 +950,43 @@ defmodule AshQuint.GenTest do
       assert Gen.quint_line(config(tmp_dir), %{"args" => @args, "index" => 2}) ==
                "npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt " <>
                  "--main=counter --seed=4031 --max-steps=10 --backend=rust " <>
-                 "--out-itf=explore_{seq}.itf.json (trace 2)"
+                 "'--out-itf=explore_{seq}.itf.json' (trace 2)"
     end
 
     test "quint_line/2 quotes words with other characters", %{tmp_dir: tmp_dir} do
-      args = ["run", "--invariant=not(witA)", "a b", "it's", "--x=a+b@c:d,{e}"]
+      args = ["run", "--invariant=not(witA)", "a b", "it's", "--x=a+b@c:d"]
 
       assert Gen.quint_line(config(tmp_dir), %{"args" => args, "index" => 0}) ==
                "npx --yes @informalsystems/quint@0.33.1 run '--invariant=not(witA)' 'a b' " <>
-                 "'it'\\''s' --x=a+b@c:d,{e} --out-itf=explore_{seq}.itf.json (trace 0)"
+                 "'it'\\''s' --x=a+b@c:d '--out-itf=explore_{seq}.itf.json' (trace 0)"
+    end
+
+    test "quint_line/2 quotes braces and commas against brace expansion", %{tmp_dir: tmp_dir} do
+      args = ["run", "a{b,c}", "a{1..3}", "x,y"]
+
+      assert Gen.quint_line(config(tmp_dir), %{"args" => args, "index" => 0}) ==
+               "npx --yes @informalsystems/quint@0.33.1 run 'a{b,c}' 'a{1..3}' 'x,y' " <>
+                 "'--out-itf=explore_{seq}.itf.json' (trace 0)"
+    end
+
+    test "quint_line/2 uses the provenance's Quint version", %{tmp_dir: tmp_dir} do
+      provenance = %{"args" => ["run"], "index" => 0, "quint" => "0.30.0"}
+
+      assert Gen.quint_line(config(tmp_dir), provenance) ==
+               "npx --yes @informalsystems/quint@0.30.0 run " <>
+                 "'--out-itf=explore_{seq}.itf.json' (trace 0)"
+    end
+
+    test "quint_line/2 without a provenance version uses the configured one",
+         %{tmp_dir: tmp_dir} do
+      for provenance <- [
+            %{"args" => ["run"], "index" => 0},
+            %{"args" => ["run"], "index" => 0, "quint" => 1}
+          ] do
+        assert Gen.quint_line(config(tmp_dir), provenance) ==
+                 "npx --yes @informalsystems/quint@0.33.1 run " <>
+                   "'--out-itf=explore_{seq}.itf.json' (trace 0)"
+      end
     end
 
     test "quint_line/2 without args is nil", %{tmp_dir: tmp_dir} do

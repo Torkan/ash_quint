@@ -52,7 +52,9 @@ defmodule AshQuint.Explore do
   with `shrunk` (`rounds`, `run`, `steps`) added to its provenance (whose
   `args` still regenerate the batch's original trace), and its
   confirmation replay's message becomes the failure's. A candidate that
-  can't be shrunk is written as confirmed, with the reason in the report.
+  can't be shrunk is written as confirmed, with the reason in the report;
+  shrinking that raises counts as not shrunk (`shrinking raised: …`), so
+  it never fails the session.
 
   The session stops when `runs` traces are generated, `failures` failures
   are found, the budget is spent (checked before each batch but the
@@ -99,14 +101,15 @@ defmodule AshQuint.Explore do
 
   @typedoc """
   A shrunk candidate: the steps of the confirmed candidate (`from`), its
-  own steps, the shrink rounds and its run expression (see
-  `AshQuint.Shrink.shrink/3`).
+  own steps, the shrink rounds, its run expression and why the loop
+  stopped early, or `nil` (see `t:AshQuint.Shrink.result/0`).
   """
   @type shrunk :: %{
           from: non_neg_integer(),
           steps: non_neg_integer(),
           rounds: non_neg_integer(),
-          run: String.t()
+          run: String.t(),
+          stopped: String.t() | nil
         }
 
   @type report :: %{
@@ -413,7 +416,8 @@ defmodule AshQuint.Explore do
   end
 
   # A confirmed candidate shrunk (`{:ok, binary, shrunk}`), or why not; nil
-  # without shrink:.
+  # without shrink:. Shrinking never fails the session: an exception leaves
+  # the candidate unshrunk.
   defp shrink(%{interface: nil}, _candidate, _action, _trace, _index), do: nil
 
   defp shrink(%{interface: {:error, message}}, _candidate, _action, _trace, _index),
@@ -431,6 +435,8 @@ defmodule AshQuint.Explore do
       keep?: &keep?(session, &1, name, seed, index),
       dir: session.shrink_dir
     )
+  rescue
+    error -> {:not_shrunk, "shrinking raised: " <> Exception.message(error)}
   end
 
   # A reduction must decode, since the replay decodes it outside its
@@ -506,12 +512,12 @@ defmodule AshQuint.Explore do
 
     {candidate, provenance, message, shrunk} =
       case shrunk do
-        {:ok, binary, %{steps: steps, rounds: rounds, run: run, message: message}} ->
+        {:ok, binary, %{steps: steps, rounds: rounds, run: run, message: message} = result} ->
           from = length(Jason.decode!(candidate)["states"]) - 1
           recorded = %{"rounds" => rounds, "run" => run, "steps" => steps}
 
           {binary, Map.put(provenance, "shrunk", recorded), message,
-           %{from: from, steps: steps, rounds: rounds, run: run}}
+           %{from: from, steps: steps, rounds: rounds, run: run, stopped: result.stopped}}
 
         other ->
           {candidate, provenance, message, other}
@@ -581,7 +587,8 @@ defmodule AshQuint.Explore do
   Otherwise a header line counts the failures, followed, each after a
   blank line, by each failure's message, its candidate (relative to the
   current directory), with shrinking `shrunk from <n> to <m> steps (<k>
-  rounds)` or `not shrunk: <reason>`, the `quint run` command that
+  rounds)` (and `stopped:   <reason>` when the loop stopped early) or
+  `not shrunk: <reason>`, the `quint run` command that
   regenerates its trace as the batch generated it
   (`AshQuint.Gen.quint_line/2`), a shrunk candidate's `run:` expression
   and the `mix ash_quint.promote` command
@@ -644,17 +651,7 @@ defmodule AshQuint.Explore do
 
     quint = if failure.quint, do: ["quint:     " <> failure.quint], else: []
 
-    {shrunk, run} =
-      case Map.get(failure, :shrunk) do
-        %{from: from, steps: steps, rounds: rounds, run: run} ->
-          {["shrunk from #{from} to #{steps} steps (#{rounds} rounds)"], ["run:       " <> run]}
-
-        {:not_shrunk, reason} ->
-          {["not shrunk: " <> reason], []}
-
-        nil ->
-          {[], []}
-      end
+    {shrunk, run} = shrunk_lines(Map.get(failure, :shrunk))
 
     Enum.join(
       ["#{failure.message}", "candidate: #{path} (#{how})"] ++
@@ -662,6 +659,21 @@ defmodule AshQuint.Explore do
       "\n"
     )
   end
+
+  # The shrink lines after the candidate line, and the run line after quint:.
+  defp shrunk_lines(%{from: from, steps: steps, rounds: rounds, run: run} = shrunk) do
+    stopped =
+      case Map.get(shrunk, :stopped) do
+        nil -> []
+        reason -> ["stopped:   " <> reason]
+      end
+
+    {["shrunk from #{from} to #{steps} steps (#{rounds} rounds)" | stopped],
+     ["run:       " <> run]}
+  end
+
+  defp shrunk_lines({:not_shrunk, reason}), do: {["not shrunk: " <> reason], []}
+  defp shrunk_lines(nil), do: {[], []}
 
   defp seeds(%{seeds: first..last//_}), do: "#{first}..#{last}"
 

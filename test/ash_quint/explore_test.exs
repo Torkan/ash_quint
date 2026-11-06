@@ -4,7 +4,7 @@ defmodule AshQuint.ExploreTest do
   # with `mix test --only quint_cli`.
   use ExUnit.Case, async: false
 
-  alias AshQuint.{Config, Explore, Gen, Manifest, Replay, Trace}
+  alias AshQuint.{Config, Explore, Gen, ITF, Manifest, Replay, Trace}
   alias Config.Model
   alias Mix.Tasks.AshQuint.Promote
 
@@ -38,6 +38,31 @@ defmodule AshQuint.ExploreTest do
     def init(trace, opts) do
       first = Agent.get_and_update(opts[:agent], &{&1, false})
       ToyAdapter.init(trace, faults: if(first, do: [:off_by_one], else: []))
+    end
+
+    @impl true
+    defdelegate step(ctx, step), to: ToyAdapter
+
+    @impl true
+    defdelegate project(ctx), to: ToyAdapter
+
+    @impl true
+    defdelegate outcome(result), to: ToyAdapter
+  end
+
+  defmodule SpyAdapter do
+    @moduledoc false
+    # The toy adapter, telling adapter_opts[:test] about every replay:
+    # {:replayed, whether the trace has a Pending step}.
+    use AshQuint.Adapter
+
+    alias AshQuint.Test.ToyAdapter
+
+    @impl true
+    def init(trace, opts) do
+      pending? = Enum.any?(trace.states, &match?(%{"lastResult" => {:variant, "Pending", _}}, &1))
+      send(opts[:test], {:replayed, pending?})
+      ToyAdapter.init(trace, opts)
     end
 
     @impl true
@@ -358,7 +383,7 @@ defmodule AshQuint.ExploreTest do
       assert failure.quint ==
                "npx --yes @informalsystems/quint@0.33.1 run test/fixtures/case/ok/model.qnt " <>
                  "--main=toy --seed=10 --max-steps=3 --max-samples=2 --n-traces=2 " <>
-                 "--out-itf=explore_{seq}.itf.json (trace 0)"
+                 "'--out-itf=explore_{seq}.itf.json' (trace 0)"
 
       path = Path.relative_to_cwd(failure.candidate)
 
@@ -613,6 +638,31 @@ defmodule AshQuint.ExploreTest do
       }
     end
 
+    # The values of every {tag, value} message received so far.
+    defp drain(tag) do
+      receive do
+        {^tag, value} -> [value | drain(tag)]
+      after
+        0 -> []
+      end
+    end
+
+    defp pending_reset(states) do
+      case Enum.find_index(states, &match?(%{"lastAction" => %{"tag" => "Reset"}}, &1)) do
+        nil ->
+          states
+
+        i ->
+          List.update_at(states, i, fn state ->
+            %{
+              state
+              | "lastAction" => %{"tag" => "Reset", "value" => %{"op" => "o1"}},
+                "lastResult" => %{"tag" => "Pending", "value" => %{"#tup" => []}}
+            }
+          end)
+      end
+    end
+
     defp quint_tests do
       receive do
         {:quint_test, args} -> [args | quint_tests()]
@@ -641,7 +691,13 @@ defmodule AshQuint.ExploreTest do
       assert [failure] = report.failures
       assert %{cut_at: nil, reproduced: true} = failure
 
-      assert failure.shrunk == %{from: 3, steps: 1, rounds: 2, run: "init.then(inc(1))"}
+      assert failure.shrunk == %{
+               from: 3,
+               steps: 1,
+               rounds: 2,
+               run: "init.then(inc(1))",
+               stopped: nil
+             }
 
       # The message is the shrunk trace's, as its promoted test prints it.
       assert failure.message =~ ~r/\Ashrink regression 10_0, step 1 \(Inc\), seed 10: /
@@ -692,6 +748,52 @@ defmodule AshQuint.ExploreTest do
         run(settings(), [traces: :sequential] ++ @off_by_one, tmp_dir, runner: shrink_runner())
 
       assert [%{shrunk: %{steps: 1, rounds: 2}}] = report.failures
+    end
+
+    test "with a traces: selection, a reduction that leaves it isn't kept", %{tmp_dir: tmp_dir} do
+      batch = shrink_runner()
+
+      # Round 0 as Quint writes it; in every later run the first Reset is a
+      # pending op that never completes, so the reduction is concurrent.
+      runner = fn exe, args, opts ->
+        result = batch.(exe, args, opts)
+
+        if "test" in args and Process.put(:round_zero_done, true) do
+          "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
+
+          for path <- Path.wildcard(String.replace(out, "{test}", "*")) do
+            itf = Jason.decode!(File.read!(path))
+            File.write!(path, Jason.encode!(%{itf | "states" => pending_reset(itf["states"])}))
+            send(self(), {:reduction, File.read!(path)})
+          end
+        end
+
+        result
+      end
+
+      opts = [
+        traces: :sequential,
+        model: :shrink,
+        adapter: SpyAdapter,
+        adapter_opts: [faults: [:off_by_one], test: self()]
+      ]
+
+      report = run(settings(), opts, tmp_dir, runner: runner)
+
+      assert [%{shrunk: {:not_shrunk, "no step could be removed"}}] = report.failures
+
+      # The reductions decode, are concurrent, and are never replayed.
+      model = Config.model!(Config.load!(@config), :shrink)
+      assert [_ | _] = reductions = drain(:reduction)
+
+      for binary <- reductions do
+        trace = ITF.decode!(Jason.decode!(binary), "reduction")
+        assert Gen.entry("r.itf.json", :regression, "r", trace, model).concurrent
+      end
+
+      replayed = drain(:replayed)
+      assert false in replayed
+      refute true in replayed
     end
 
     test "a reduction Quint passes but that can't be decoded isn't kept", %{tmp_dir: tmp_dir} do
@@ -746,6 +848,58 @@ defmodule AshQuint.ExploreTest do
                "quint:     " <> failure.quint,
                "promote:   MIX_ENV=test mix ash_quint.promote #{path}"
              ]
+    end
+
+    test "a round that writes no runs stops shrinking, with a note", %{tmp_dir: tmp_dir} do
+      inner = shrink_runner()
+
+      # Round 0 and round 1 as Quint writes them; round 2 writes nothing.
+      runner = fn exe, args, opts ->
+        if "test" in args do
+          calls = Process.get(:quint_test_calls, 0)
+          Process.put(:quint_test_calls, calls + 1)
+          if calls < 2, do: inner.(exe, args, opts), else: {"\nerror: gone\n", 1}
+        else
+          inner.(exe, args, opts)
+        end
+      end
+
+      report = run(settings(), @off_by_one, tmp_dir, runner: runner)
+
+      assert [failure] = report.failures
+
+      assert %{steps: 2, rounds: 1, stopped: "quint test wrote no runs: error: gone"} =
+               failure.shrunk
+
+      path = Path.relative_to_cwd(failure.candidate)
+
+      assert Enum.drop(block_lines(report), length(String.split(failure.message, "\n"))) == [
+               "candidate: #{path} (not cut)",
+               "shrunk from 3 to 2 steps (1 rounds)",
+               "stopped:   quint test wrote no runs: error: gone",
+               "quint:     " <> failure.quint,
+               "run:       " <> failure.shrunk.run,
+               "promote:   MIX_ENV=test mix ash_quint.promote #{path}"
+             ]
+    end
+
+    test "shrinking that raises leaves the candidate unshrunk", %{tmp_dir: tmp_dir} do
+      batch = runner(@shrink_batch)
+
+      runner = fn exe, args, opts ->
+        if "test" in args, do: raise("quint blew up"), else: batch.(exe, args, opts)
+      end
+
+      report = run(settings(), @off_by_one, tmp_dir, runner: runner)
+
+      assert [failure] = report.failures
+      assert failure.shrunk == {:not_shrunk, "shrinking raised: quint blew up"}
+
+      binary = File.read!(failure.candidate)
+      assert length(Jason.decode!(binary)["states"]) == 4
+      assert {:ok, provenance} = Gen.provenance(binary)
+      refute Map.has_key?(provenance, "shrunk")
+      assert "not shrunk: shrinking raised: quint blew up" in block_lines(report)
     end
 
     test "no interface: not shrunk", %{tmp_dir: tmp_dir} do
@@ -1206,7 +1360,7 @@ defmodule AshQuint.ExploreTest do
 
       assert failure.quint =~
                " --backend=rust --witnesses witOverLimit witResetAfterInc " <>
-                 "--out-itf=explore_{seq}.itf.json (trace "
+                 "'--out-itf=explore_{seq}.itf.json' (trace "
     end
 
     test "race with the read-modify-write action finds the lost update", %{tmp_dir: tmp_dir} do
