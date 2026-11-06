@@ -4,7 +4,14 @@ defmodule AshQuint.ReplayTest do
   import AshQuint.Test.TraceBuilder
 
   alias AshQuint.{ITF, Replay}
-  alias AshQuint.Test.{ToyAdapter, ToyAdapterCounts, ToyAdapterMissingKey, ToyAdapterNoReset}
+
+  alias AshQuint.Test.{
+    PostconditionToyAdapter,
+    ToyAdapter,
+    ToyAdapterCounts,
+    ToyAdapterMissingKey,
+    ToyAdapterNoReset
+  }
 
   @prefix "counter random t, step"
   @use_start "use {:start, op, call, ctx} and {:complete, op, ctx} for calls that stay in flight"
@@ -96,6 +103,27 @@ defmodule AshQuint.ReplayTest do
 
     @impl true
     defdelegate outcome(result), to: ToyAdapter
+  end
+
+  defmodule ProjectingPostconditions do
+    @moduledoc false
+    # The postcondition toy adapter that also projects the toy adapter's count.
+    use AshQuint.Adapter
+
+    @impl true
+    defdelegate init(trace, opts), to: PostconditionToyAdapter
+
+    @impl true
+    defdelegate step(ctx, step), to: PostconditionToyAdapter
+
+    @impl true
+    defdelegate project(ctx), to: ToyAdapter
+
+    @impl true
+    defdelegate outcome(result), to: PostconditionToyAdapter
+
+    @impl true
+    defdelegate postconditions, to: PostconditionToyAdapter
   end
 
   defmodule RaisingProject do
@@ -715,6 +743,85 @@ defmodule AshQuint.ReplayTest do
     test "no context by default" do
       lines = String.split(message(clean(), [:off_by_one]), "\n")
       assert List.last(lines) == ~s(model step: Inc %{"by" => 1}, result :accepted)
+    end
+  end
+
+  describe "postconditions" do
+    defp post(states, faults \\ [], opts \\ []) do
+      Replay.run(
+        Keyword.get(opts, :adapter, PostconditionToyAdapter),
+        trace(states),
+        [model: :counter, adapter_opts: [faults: faults, test: self()]] ++
+          Keyword.delete(opts, :adapter)
+      )
+    end
+
+    defp post_message(states, faults, opts \\ []) do
+      assert {:error, %{message: message}} = post(states, faults, opts)
+      message
+    end
+
+    defp postcondition_calls do
+      receive do
+        {:postcondition, index} -> [index | postcondition_calls()]
+      after
+        0 -> []
+      end
+    end
+
+    test "passing postconditions" do
+      assert {:ok, report} = post(clean())
+      assert report.initial_expected == %{}
+      assert length(report.synced) == 4
+      assert Enum.all?(report.synced, &(&1.expected == %{}))
+    end
+
+    test "a failing postcondition fails its step" do
+      assert post_message(clean(), [:off_by_one]) ==
+               "#{@prefix} 1 (Inc), seed 7: postcondition count_matches: count 2, model 1" <>
+                 ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
+    end
+
+    test "a raising postcondition fails its step" do
+      assert post_message(clean(), [:raising_post]) ==
+               "#{@prefix} 1 (Inc), seed 7: " <>
+                 "postcondition count_matches raised: postcondition blew up" <>
+                 ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
+    end
+
+    test "postconditions run on skipped steps" do
+      assert {:ok, _report} = post([init(), peek(0), inc(1, 1)])
+      assert postcondition_calls() == [1, 2]
+    end
+
+    test "postconditions run on a dropped call's skip" do
+      assert post_message(clean(), [], mutate: {:drop, 1}) ==
+               "#{@prefix} 1 (Inc), seed 7: postcondition count_matches: count 0, model 1" <>
+                 ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
+    end
+
+    test "postconditions don't run after {:pending, …}" do
+      assert {:ok, _report} = post([init(), begin(0, 2), commit(2)])
+      assert postcondition_calls() == [2]
+    end
+
+    test "postconditions don't run on the initial state" do
+      assert {:ok, _report} = post(clean())
+      assert postcondition_calls() == [1, 2, 3, 4]
+    end
+
+    test "postcondition problems follow state and invariant problems" do
+      assert post_message(clean(), [:off_by_one], adapter: ProjectingPostconditions) ==
+               "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2\n" <>
+                 "postcondition count_matches: count 2, model 1" <>
+                 ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
+    end
+
+    test "an adapter without project/1 replays" do
+      assert post_message(clean(), [:wrong_code]) ==
+               ~s(#{@prefix} 3 \(Inc\), seed 7: ) <>
+                 ~s(outcome: expected {:rejected, "too_big"}, got {:rejected, "other"}) <>
+                 ~s(\nmodel step: Inc %{"by" => 1}, result {:rejected, "too_big"})
     end
   end
 end

@@ -286,3 +286,46 @@ defmodule AshQuint.Test.ToyAdapterCounts do
   @doc "`state` with the model's `counts` for its `count`."
   def with_counts(state), do: Map.put(state, "counts", counts(state["count"]))
 end
+
+defmodule AshQuint.Test.PostconditionToyAdapter do
+  @moduledoc false
+  # The toy adapter without project/1: its postcondition count_matches
+  # compares ctx.count with the model's "count" instead. `faults:` are the
+  # toy adapter's, plus:
+  #
+  #   :blind_post     the postcondition always returns :ok
+  #   :raising_post   the postcondition raises
+  #
+  # With `test:` (a pid), the postcondition sends it
+  # {:postcondition, step.index} on every call.
+  use AshQuint.Adapter
+
+  alias AshQuint.Step
+  alias AshQuint.Test.ToyAdapter
+
+  @impl true
+  def init(trace, opts) do
+    {:ok, ctx} = ToyAdapter.init(trace, opts)
+    {:ok, Map.put(ctx, :test, Keyword.get(opts, :test))}
+  end
+
+  @impl true
+  defdelegate step(ctx, step), to: ToyAdapter
+
+  @impl true
+  defdelegate outcome(result), to: ToyAdapter
+
+  @impl true
+  def postconditions, do: [count_matches: &count_matches/2]
+
+  defp count_matches(ctx, %Step{index: index, state: %{"count" => model}}) do
+    if ctx.test, do: send(ctx.test, {:postcondition, index})
+
+    cond do
+      :raising_post in ctx.faults -> raise "postcondition blew up"
+      :blind_post in ctx.faults -> :ok
+      ctx.count == model -> :ok
+      true -> {:error, "count #{ctx.count}, model #{model}"}
+    end
+  end
+end

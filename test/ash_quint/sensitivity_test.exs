@@ -4,7 +4,14 @@ defmodule AshQuint.SensitivityTest do
   import AshQuint.Test.TraceBuilder
 
   alias AshQuint.Sensitivity
-  alias AshQuint.Test.{ToyAdapter, ToyAdapterBlindReset, ToyAdapterCounts, ToyAdapterLimit}
+
+  alias AshQuint.Test.{
+    PostconditionToyAdapter,
+    ToyAdapter,
+    ToyAdapterBlindReset,
+    ToyAdapterCounts,
+    ToyAdapterLimit
+  }
 
   defmodule TickAdapter do
     @moduledoc false
@@ -420,5 +427,48 @@ defmodule AshQuint.SensitivityTest do
   test "format names the variable" do
     result = %{survived: [], untested: [{:var, "inflight"}], never_overlap: []}
     assert Sensitivity.format(result) == ~s(variable "inflight" is never projected)
+  end
+
+  describe "postcondition adapters" do
+    test "a postcondition that sees a dropped call tests the action" do
+      assert check(PostconditionToyAdapter, [[init(), inc(1, 1), reset()]]) == %{
+               never_overlap: [],
+               survived: [],
+               untested: [],
+               tested: [{:call, "Inc"}, {:call, "Reset"}]
+             }
+    end
+
+    test "a postcondition blind to a dropped call leaves it untested" do
+      assert check(PostconditionToyAdapter, [[init(), inc(1, 1), reset()]], [:blind_post]) == %{
+               never_overlap: [],
+               survived: [{:drop, "random t", 1, "Inc"}, {:drop, "random t", 2, "Reset"}],
+               untested: [{:call, "Inc"}, {:call, "Reset"}],
+               tested: []
+             }
+    end
+
+    test "a rejected call gets no postcondition mutant" do
+      states = [init(), inc(0, 4, {:rejected, "too_big"}), reset()]
+
+      assert check(PostconditionToyAdapter, [states]) == %{
+               never_overlap: [],
+               survived: [{:drop, "random t", 2, "Reset"}],
+               untested: [{:call, "Inc"}, {:call, "Reset"}],
+               tested: []
+             }
+    end
+
+    test "the first accepted call is dropped, in any trace" do
+      rejected = [init(), inc(0, 4, {:rejected, "too_big"})]
+      accepted = [init(), peek(0), inc(1, 1)]
+
+      assert check(PostconditionToyAdapter, [rejected, accepted]) == %{
+               never_overlap: [],
+               survived: [],
+               untested: [],
+               tested: [{:call, "Inc"}]
+             }
+    end
   end
 end

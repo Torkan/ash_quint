@@ -27,8 +27,9 @@ defmodule AshQuint.Replay do
     4. the ops in flight settle: each reaches a gate or finishes (or counts
        as blocked, with `may_block: true`), within `:settle_timeout`;
     5. except after `{:pending, …}`, `project/1` must equal the expected
-       values on its keys, and every invariant must hold; all of a step's
-       failures are reported together;
+       values on its keys, every invariant must hold, and then every
+       postcondition (see `AshQuint.Adapter`); all of a step's failures are
+       reported together;
     6. a trace that ends with a step pending fails; one that ends with ops
        in flight passes, and the ops are cancelled unchecked.
 
@@ -276,7 +277,7 @@ defmodule AshQuint.Replay do
 
   defp initial_expected(run, %{ctx: ctx} = st, step0) do
     with {:ok, projected} <-
-           initial(run, st, step0, "project/1", fn -> run.adapter.project(ctx) end),
+           initial(run, st, step0, "project/1", fn -> Adapter.project(run.adapter, ctx) end),
          {:ok, expected} <-
            initial(run, st, step0, "expected/2", fn ->
              Adapter.expected(run.adapter, ctx, step0, projected)
@@ -691,7 +692,7 @@ defmodule AshQuint.Replay do
 
   defp sync(run, step, kind, errors, st, op \\ nil) do
     ctx = st.ctx
-    projected = guard(run, ctx, step, "project/1", fn -> run.adapter.project(ctx) end)
+    projected = guard(run, ctx, step, "project/1", fn -> Adapter.project(run.adapter, ctx) end)
 
     expected =
       guard(run, ctx, step, "expected/2", fn ->
@@ -703,7 +704,11 @@ defmodule AshQuint.Replay do
     invariant_errors =
       guard(run, ctx, step, "invariants/0", fn -> invariant_errors(run, projected, ctx) end)
 
-    errors = errors ++ state_errors(projected, expected) ++ invariant_errors
+    postcondition_errors =
+      guard(run, ctx, step, "postconditions/0", fn -> postcondition_errors(run, ctx, step) end)
+
+    errors =
+      errors ++ state_errors(projected, expected) ++ invariant_errors ++ postcondition_errors
 
     if errors == [] do
       # Only the projected keys were compared, so only they are reported.
@@ -800,6 +805,21 @@ defmodule AshQuint.Replay do
     end
   rescue
     error -> "invariant #{name} raised: #{Exception.message(error)}"
+  end
+
+  defp postcondition_errors(run, ctx, step) do
+    for {name, check} <- Adapter.postconditions(run.adapter),
+        error = postcondition_error(name, check, ctx, step),
+        do: error
+  end
+
+  defp postcondition_error(name, check, ctx, step) do
+    case check.(ctx, step) do
+      :ok -> nil
+      {:error, message} -> "postcondition #{name}: #{message}"
+    end
+  rescue
+    error -> "postcondition #{name} raised: #{Exception.message(error)}"
   end
 
   defp halt(run, step, st, lines), do: {:halt, halt_error(run, step, st, lines)}

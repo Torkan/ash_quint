@@ -9,6 +9,38 @@ defmodule AshQuint.ReplayConcurrentTest do
 
   @prefix "counter random t, step"
 
+  defmodule Postconditions do
+    @moduledoc false
+    # The concurrent toy adapter with a postcondition that sends
+    # {:postcondition, index, count} to `test:` and passes.
+    use AshQuint.Adapter
+
+    @impl true
+    defdelegate init(trace, opts), to: ConcurrentToyAdapter
+
+    @impl true
+    defdelegate step(ctx, step), to: ConcurrentToyAdapter
+
+    @impl true
+    defdelegate project(ctx), to: ConcurrentToyAdapter
+
+    @impl true
+    defdelegate outcome(result), to: ConcurrentToyAdapter
+
+    @impl true
+    defdelegate finish(ctx, result), to: ConcurrentToyAdapter
+
+    @impl true
+    def postconditions do
+      [
+        seen: fn ctx, step ->
+          send(ctx.test, {:postcondition, step.index, Agent.get(ctx.agent, & &1.count)})
+          :ok
+        end
+      ]
+    end
+  end
+
   defp run(states, adapter_opts \\ [], opts \\ []) do
     {trace_opts, opts} = Keyword.split(opts, [:results])
 
@@ -532,6 +564,21 @@ defmodule AshQuint.ReplayConcurrentTest do
                %{op: "o1", started_at: 1, at_gate: :requested},
                %{op: "o2", started_at: 2, at_gate: nil}
              ]
+    end
+  end
+
+  describe "postconditions" do
+    test "postconditions run at an op's start and completion" do
+      assert {:ok, _report} =
+               Replay.run(Postconditions, trace(race()),
+                 model: :counter,
+                 adapter_opts: [test: self()]
+               )
+
+      for {index, count} <- [{1, 0}, {2, 0}, {3, 2}, {4, 2}],
+          do: assert_received({:postcondition, ^index, ^count})
+
+      refute_received {:postcondition, _index, _count}
     end
   end
 end

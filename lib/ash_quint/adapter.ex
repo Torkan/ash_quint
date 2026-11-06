@@ -8,8 +8,9 @@ defmodule AshQuint.Adapter do
   `step/2` for every state after the initial one. After each step that
   synced (all but `{:pending, …}`), once the ops in flight have settled, it
   compares `project/1` with
-  `expected/2` on the keys `project/1` returns, and runs `invariants/0`.
-  When the replay ends, pass or fail, it calls `finish/2`.
+  `expected/2` on the keys `project/1` returns, runs `invariants/0` and then
+  `postconditions/0`. When the replay ends, pass or fail, it calls
+  `finish/2`.
 
     * `init/2` builds the `ctx` for one trace. Use a map if you use
       `AshQuint.Names`.
@@ -24,14 +25,17 @@ defmodule AshQuint.Adapter do
       `t:step_result/0` and the README's "Concurrent calls"). A step whose
       result is `Pending` (`step.result == :pending`) must return
       `:start`, `:advance` or `:pending`.
-    * `project/1` returns the system's state, keyed by the model variables
-      it covers.
+    * `project/1` (optional) returns the system's state, keyed by the model
+      variables it covers. Without it, no key is compared.
     * `expected/2` (optional) returns the model's value for each projected
       key. A projected key it leaves out is a failure.
     * `outcome/1` (optional) classifies a system call's result as
       `:accepted`, `{:rejected, code}` or `{:failed, message}`.
     * `invariants/0` (optional) lists named checks run on every synced
       step.
+    * `postconditions/0` (optional) lists named checks of what each synced
+      step promises, given the step's `ctx` and the model step (see
+      "Postconditions").
     * `finish/2` (optional) runs once when the replay ends, to release what
       `ctx` holds and for checks that belong after the last step.
     * `blocked?/2` (optional) says whether an op in flight that hasn't
@@ -62,6 +66,22 @@ defmodule AshQuint.Adapter do
   An exception from `finish/2` propagates, except while an adapter exception
   is already propagating: that one is kept, and `finish/2`'s is dropped.
 
+  ## Postconditions
+
+  A postcondition is `{name, fun}`, `fun.(ctx, step)` returning `:ok` or
+  `{:error, message}`. It runs on every synced step (every step but
+  `{:pending, …}` ones, never on the initial state), after the state
+  comparison and the invariants, with the step's `ctx` and its
+  `AshQuint.Step`: the picks, the model state and the model result. It
+  reads the system itself, as `project/1` does, or what `step/2` kept in
+  `ctx` (the call's result). A failure reads
+  `postcondition <name>: <message>`, an exception
+  `postcondition <name> raised: <message>`, among the step's other problems.
+
+  A light adapter defines no `project/1`: it checks outcomes, invariants
+  and postconditions only. With neither `project/1` nor postconditions, an
+  adapter checks outcomes and invariants only.
+
   ## Exceptions
 
   An exception from `project/1` or `expected/2` on the initial state fails
@@ -79,11 +99,13 @@ defmodule AshQuint.Adapter do
   `AshQuint.Replay` supplies a default for each optional callback the
   adapter doesn't define, with or without `use`:
 
+    * `project/1`: `%{}`, so no key is compared;
     * `expected/2`: the model state on the projected keys,
       `Map.take(step.state, Map.keys(projected))`, for models whose values
       are already real;
     * `outcome/1`: as above, decided at run time (see `outcome/2`);
     * `invariants/0`: `[]`;
+    * `postconditions/0`: `[]`;
     * `finish/2`: none; nothing is called when the replay ends.
 
   ## Blocked ops
@@ -123,6 +145,9 @@ defmodule AshQuint.Adapter do
   @type outcome :: :accepted | {:rejected, String.t()} | {:failed, String.t()}
 
   @type invariant :: {atom(), (projected :: map(), ctx() -> :ok | {:error, String.t()})}
+
+  @typedoc "A named check of one synced step, given its `ctx` and model step."
+  @type postcondition :: {atom(), (ctx(), Step.t() -> :ok | {:error, String.t()})}
 
   @doc "Builds the `ctx` for one trace."
   @callback init(AshQuint.Trace.t(), opts :: keyword()) :: {:ok, ctx()}
@@ -173,6 +198,9 @@ defmodule AshQuint.Adapter do
   @doc "Named checks run on the projection after every synced step."
   @callback invariants() :: [invariant()]
 
+  @doc "Named checks run with the `ctx` and the model step after every synced step."
+  @callback postconditions() :: [postcondition()]
+
   @doc "Runs once when the replay ends, with the latest `ctx` and the result."
   @callback finish(ctx(), result :: :ok | {:error, AshQuint.Replay.failure()}) ::
               :ok | {:error, String.t()}
@@ -191,7 +219,13 @@ defmodule AshQuint.Adapter do
   """
   @callback blocked?(ctx(), op_info()) :: boolean()
 
-  @optional_callbacks expected: 2, outcome: 1, invariants: 0, finish: 2, blocked?: 2
+  @optional_callbacks project: 1,
+                      expected: 2,
+                      outcome: 1,
+                      invariants: 0,
+                      postconditions: 0,
+                      finish: 2,
+                      blocked?: 2
 
   @doc false
   defmacro __using__(_opts) do
@@ -222,6 +256,15 @@ defmodule AshQuint.Adapter do
   def default_outcome(:ok), do: :accepted
   def default_outcome({:ok, _}), do: :accepted
   def default_outcome(other), do: {:failed, inspect(other)}
+
+  @doc """
+  The system state: `adapter.project(ctx)` when the adapter defines it, else
+  `%{}`.
+  """
+  @spec project(module(), ctx()) :: map()
+  def project(adapter, ctx) do
+    if exports?(adapter, :project, 1), do: adapter.project(ctx), else: %{}
+  end
 
   @doc """
   The expected values for a step: `adapter.expected(ctx, step)` when the
@@ -256,6 +299,15 @@ defmodule AshQuint.Adapter do
   @spec invariants(module()) :: [invariant()]
   def invariants(adapter) do
     if exports?(adapter, :invariants, 0), do: adapter.invariants(), else: []
+  end
+
+  @doc """
+  The adapter's postconditions, or `[]` when it doesn't define
+  `postconditions/0`.
+  """
+  @spec postconditions(module()) :: [postcondition()]
+  def postconditions(adapter) do
+    if exports?(adapter, :postconditions, 0), do: adapter.postconditions(), else: []
   end
 
   @doc """

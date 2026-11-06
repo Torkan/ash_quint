@@ -3,7 +3,7 @@ defmodule AshQuint.AdapterTest do
 
   alias Ash.Error.Invalid
   alias AshQuint.{Adapter, Step}
-  alias AshQuint.Test.Rejected
+  alias AshQuint.Test.{PostconditionToyAdapter, Rejected, ToyAdapter}
 
   defmodule Minimal do
     @moduledoc false
@@ -79,5 +79,23 @@ defmodule AshQuint.AdapterTest do
     assert Adapter.invariants(Minimal) == []
     assert [always: fun] = Adapter.invariants(Custom)
     assert fun.(%{}, %{}) == :ok
+  end
+
+  test "project/2 calls project/1" do
+    {:ok, ctx} = ToyAdapter.init(nil, [])
+    assert Adapter.project(ToyAdapter, ctx) == %{"count" => 0}
+  end
+
+  test "project/2 without project/1 is empty" do
+    {:ok, ctx} = PostconditionToyAdapter.init(nil, [])
+    assert Adapter.project(PostconditionToyAdapter, ctx) == %{}
+  end
+
+  test "postconditions/1 defaults to none" do
+    assert Adapter.postconditions(ToyAdapter) == []
+    assert [count_matches: fun] = Adapter.postconditions(PostconditionToyAdapter)
+    {:ok, ctx} = PostconditionToyAdapter.init(nil, [])
+    assert fun.(ctx, step(%{"count" => 0})) == :ok
+    assert fun.(ctx, step(%{"count" => 1})) == {:error, "count 0, model 1"}
   end
 end

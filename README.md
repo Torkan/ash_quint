@@ -535,8 +535,9 @@ The callbacks:
 
   `{:pending, ctx}` is the sequential form: a trace with two pending steps
   open, a skip while one is pending, or a pending step at the end fails.
-- **`project(ctx)`** returns the system's state, keyed by the model
-  variables it covers, in the model's terms. Only those keys are compared.
+- **`project(ctx)`** (optional) returns the system's state, keyed by the
+  model variables it covers, in the model's terms. Only those keys are
+  compared; without `project/1`, none is.
 - **`expected(ctx, step)`** (optional) returns the model's value for each
   projected key. The default takes them from `step.state` as they are; define
   it when the model's values need translating.
@@ -550,6 +551,14 @@ The callbacks:
   rejection codes.
 - **`invariants()`** (optional) lists `{name, fun}` checks run after every
   synced step: `fun.(projected, ctx)` returns `:ok` or `{:error, message}`.
+- **`postconditions()`** (optional) lists `{name, fun}` checks of what each
+  step promises, run after the state comparison and the invariants on
+  every synced step (not after `{:pending, …}`, not on the initial state):
+  `fun.(ctx, step)` gets the step's `ctx` and the model step (its picks,
+  model state and result) and returns `:ok` or `{:error, message}`. It
+  reads the system itself, or what `step/2` kept in `ctx`. A failure reads
+  `postcondition <name>: <message>`; an exception,
+  `postcondition <name> raised: <message>`.
 - **`finish(ctx, result)`** (optional) runs exactly once when a replay
   ends, with the latest `ctx`: with `:ok` after the last step's checks, with
   `{:error, failure}` at the first failing step, and, when an adapter
@@ -558,6 +567,33 @@ The callbacks:
   `{:error, message}` to fail a passing replay at its last step (an
   end-of-trace check, such as a witness reached on the real system); on a
   failing replay the original failure is kept.
+
+A light adapter leaves out `project/1` and checks what each step promises
+with postconditions instead of projecting the whole state. The counter's,
+with the same `step/2`:
+
+```elixir
+@impl true
+def postconditions, do: [count_matches: &count_matches/2]
+
+# After a step on counter `ctr`, its row holds the model's count.
+defp count_matches(ctx, %Step{nondet_picks: picks, state: state}) do
+  case picks["ctr"] || picks["value"] do
+    nil ->
+      :ok
+
+    ctr ->
+      # read_count/2 reads the count of the row named ctr.
+      {actual, expected} = {read_count(ctx, ctr), state["counts"][ctr]}
+      if actual == expected, do: :ok, else: {:error, "#{ctr}: count #{actual}, model #{expected}"}
+  end
+end
+```
+
+Outcomes, invariants and postconditions are checked as usual; no key is
+compared. An adapter with neither `project/1` nor postconditions checks
+outcomes and invariants only. See [Sensitivity](#sensitivity) for what
+the check tries on such an adapter.
 
 Two rules matter in practice:
 
@@ -822,11 +858,11 @@ appends its own lines with the `:context` option.
 The problems are an outcome mismatch, a failed system call
 (`{:failed, message}`), a missing `step/2` clause, a bad return value, a
 projected key that differs from the model (or has no expected value), a
-failing invariant, an interleaved trace (overlapping `{:pending, …}`
-steps), a model and adapter that disagree on which steps keep a call in
-flight, an op's problems (below), an exception from `project/1`
-or `expected/2` on the initial state (at step 0), and an `{:error, message}`
-from `finish/2` (at the last step). Other exceptions from the
+failing invariant, a failing (or raising) postcondition, an interleaved
+trace (overlapping `{:pending, …}` steps), a model and adapter that
+disagree on which steps keep a call in flight, an op's problems (below),
+an exception from `project/1` or `expected/2` on the initial state (at
+step 0), and an `{:error, message}` from `finish/2` (at the last step). Other exceptions from the
 adapter propagate as they are, without the prefix. That includes a missing
 clause in a helper that `step/2` delegates to: only a `FunctionClauseError`
 from the adapter's own `step/2` is reported as a missing clause.
@@ -906,6 +942,16 @@ compares the traces' variables (all but `lastAction` and `lastResult`, or
 the roots of `action_path` and `result_path`) with the keys the replay
 compared, so a variable the adapter forgot to project shows up. Keys the
 adapter projects under names that aren't model variables aren't checked.
+
+An adapter without `project/1` projects nothing on purpose: it gets no
+perturbed expectations and no variable check. With `postconditions/0`,
+each action none of whose calls changes the expected state (with no
+projection, every action) gets one more dropped call, at its first call
+whose model result is `Accepted`; the postconditions run on the skipped
+step, so one that sees the missing effect fails the replay and the action
+counts as tested. One that survives is reported, and the action stays
+untested (allow-listable like any other). Adapters without postconditions
+get exactly the mutants above.
 
 The test fails when a mutant survives, and when something is untested:
 

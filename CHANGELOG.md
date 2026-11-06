@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Postconditions: a new optional adapter callback `postconditions/0`
+  returns `[{name, fun}]`; `fun.(ctx, step)` returns `:ok` or
+  `{:error, message}`, and runs on every synced step (not after
+  `{:pending, …}`, not on the initial state), after the state comparison
+  and the invariants. Failures read `postcondition <name>: <message>` (or
+  `postcondition <name> raised: <message>`), among the step's other
+  problems. New helpers `AshQuint.Adapter.project/2` and
+  `AshQuint.Adapter.postconditions/1`, and type
+  `t:AshQuint.Adapter.postcondition/0`.
+- `project/1` is optional: without it the projection is `%{}` and no key is
+  compared. The sensitivity check then tries no perturbed key and no
+  `{:var, …}` check; an adapter with postconditions gets a dropped-call
+  mutant, at its first accepted call, for each action whose calls never
+  change the expected state: detected, the action is tested; survived, the
+  mutant is reported and `{:call, action}` stays untested. Adapters
+  without postconditions get the same mutants as before.
 - Adapter check: with a format 3 manifest, `use AshQuint.Case` reads the
   adapter's `step/2` clauses from its debug info and warns at compile time
   (`IO.warn/2` at the `use` line) about a clause for an action the model
