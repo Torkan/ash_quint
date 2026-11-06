@@ -50,6 +50,16 @@ mix test.check_migrations
   start/completion, serialized op) and untested keys, actions,
   interleavings and unprojected model variables; `overlaps/1` over a
   replay report.
+- `AshQuint.Interface` — the model interface (actions and their picks,
+  results, vars) read from `quint compile --target json` and recorded in
+  the manifest (format 3). Its tests read the JSON IR fixtures in
+  `test/fixtures/quint_ir/` (`counter.json`, `race.json`,
+  `counter_tests.json`), captured from Quint 0.33.1. Recapture them with
+  `--out`, not by redirecting stdout (which truncates), e.g.
+  `$Q compile --target json --main=counter priv/examples/counter/model.qnt
+  --out=test/fixtures/quint_ir/counter.json` (`--main=race` for
+  `priv/examples/race/model.qnt`, `--main=tests` for
+  `priv/examples/counter/model-tests.qnt`).
 - `AshQuint.Config`, `AshQuint.Manifest`, `AshQuint.Gen`,
   `Mix.Tasks.AshQuint.Gen` — `ash_quint.exs`, the manifest and
   `mix ash_quint.gen`.

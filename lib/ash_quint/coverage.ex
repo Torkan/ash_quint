@@ -4,7 +4,7 @@ defmodule AshQuint.Coverage do
   logic behind `mix ash_quint.coverage` and the table `mix ash_quint.gen`
   prints after writing.
 
-  For each action taken in the traces, the coverage counts its steps and,
+  For each of the model's actions, the coverage counts its steps and,
   per result label (`AshQuint.Step.result_label/1`: `"accepted"`,
   `"rejected:<code>"` or `"pending"` for a step that keeps its call in
   flight), the steps with that result. A table of it:
@@ -13,43 +13,67 @@ defmodule AshQuint.Coverage do
         Inc    23  accepted 20  rejected:over_limit 3
         Peek   20  accepted 20
         Reset  10  accepted 10
+        Undo    0
 
-  An outcome missing from an action's row is one no trace reaches. For a
-  model without results the rows have the step counts only; steps without
-  a result in a model that has some show as `no result <n>`.
+  The model's actions are the ones its manifest's interface records (see
+  `AshQuint.Interface`), except its init action: an action no trace takes
+  has a row of 0 steps and no outcomes (`Undo` above). An outcome missing
+  from an action's row is one no trace reaches. For a model without
+  results the rows have the step counts only; steps without a result in a
+  model that has some show as `no result <n>`.
 
-  Only actions the traces take are listed: an action the model has but no
-  trace takes doesn't appear (the manifest doesn't know the model's
-  actions).
+  A manifest written before the interface was recorded (format 2) lists
+  only the actions the traces take, and its table ends with a note asking
+  for a regeneration.
   """
 
   alias AshQuint.Manifest
 
   @type row :: %{
           action: String.t(),
-          steps: pos_integer(),
+          steps: non_neg_integer(),
           outcomes: %{String.t() => pos_integer()},
           no_result: non_neg_integer()
         }
 
-  @type t :: %{traces: non_neg_integer(), steps: non_neg_integer(), rows: [row()]}
+  @type t :: %{
+          traces: non_neg_integer(),
+          steps: non_neg_integer(),
+          rows: [row()],
+          all_actions: boolean()
+        }
 
   @doc """
-  The coverage of `manifest`'s traces, with rows sorted by action. Returns
-  `{:error, :no_outcomes}` for a manifest written before outcomes were
-  recorded (format version 1): regenerate it with `mix ash_quint.gen`.
+  The coverage of `manifest`'s traces, with rows sorted by action. With an
+  interface, every action but the init action has a row (`all_actions:
+  true`); without one (format 2), only the actions the traces take
+  (`all_actions: false`). Returns `{:error, :no_outcomes}` for a manifest
+  written before outcomes were recorded (format version 1): regenerate it
+  with `mix ash_quint.gen`.
+
+  Options: `:init_action`, the model's init action (default `"Init"`).
   """
-  @spec from_manifest(Manifest.t()) :: {:ok, t()} | {:error, :no_outcomes}
-  def from_manifest(%Manifest{traces: traces}) do
-    if Enum.any?(traces, &is_nil(&1.outcomes)) do
-      {:error, :no_outcomes}
-    else
-      {:ok, tally(traces)}
+  @spec from_manifest(Manifest.t(), init_action: String.t()) ::
+          {:ok, t()} | {:error, :no_outcomes}
+  def from_manifest(%Manifest{traces: traces, interface: interface}, opts \\ []) do
+    init_action = Keyword.get(opts, :init_action, "Init")
+
+    cond do
+      Enum.any?(traces, &is_nil(&1.outcomes)) ->
+        {:error, :no_outcomes}
+
+      interface ->
+        untaken = for %{name: name} <- interface.actions, name != init_action, do: name
+        {:ok, traces |> tally(untaken) |> Map.put(:all_actions, true)}
+
+      true ->
+        {:ok, traces |> tally([]) |> Map.put(:all_actions, false)}
     end
   end
 
-  defp tally(traces) do
-    actions = traces |> Enum.map(& &1.actions) |> Enum.reduce(%{}, &merge_counts/2)
+  defp tally(traces, model_actions) do
+    taken = traces |> Enum.map(& &1.actions) |> Enum.reduce(%{}, &merge_counts/2)
+    actions = model_actions |> Map.new(&{&1, 0}) |> Map.merge(taken)
 
     outcomes =
       Enum.reduce(traces, %{}, fn trace, acc ->
@@ -79,10 +103,11 @@ defmodule AshQuint.Coverage do
   Formats `coverage` as lines of a table headed by `name`: one row per
   action, with its step count and then each outcome label and count,
   sorted by label. `no result <n>` is shown only when some step of the
-  model has a result.
+  model has a result. Without `all_actions`, the table ends with a note
+  asking for a regeneration.
   """
   @spec format(String.t(), t()) :: [String.t()]
-  def format(name, %{traces: traces, steps: steps, rows: rows}) do
+  def format(name, %{traces: traces, steps: steps, rows: rows} = coverage) do
     header = "#{name}: #{plural(traces, "trace")}, #{plural(steps, "step")}"
     results? = Enum.any?(rows, &(&1.outcomes != %{}))
     action_width = rows |> Enum.map(&String.length(&1.action)) |> Enum.max(fn -> 0 end)
@@ -104,7 +129,15 @@ defmodule AshQuint.Coverage do
         |> IO.iodata_to_binary()
       end)
 
-    [header | lines]
+    footer =
+      if coverage.all_actions,
+        do: [],
+        else: [
+          "  (actions no trace takes aren't listed: regenerate with " <>
+            "mix ash_quint.gen #{name} to record the model's actions)"
+        ]
+
+    [header | lines] ++ footer
   end
 
   defp digits(n), do: n |> Integer.to_string() |> String.length()

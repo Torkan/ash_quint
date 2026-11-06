@@ -109,7 +109,8 @@ defmodule AshQuint.MixProject do
           AshQuint.Coverage,
           AshQuint.Config,
           AshQuint.Config.Model,
-          AshQuint.Manifest
+          AshQuint.Manifest,
+          AshQuint.Interface
         ]
       ]
     ]

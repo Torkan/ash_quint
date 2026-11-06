@@ -1,5 +1,51 @@
 {
-  "ash_quint": 2,
+  "ash_quint": 3,
+  "interface": {
+    "actions": [
+      {
+        "name": "Init",
+        "picks": "unit"
+      },
+      {
+        "fields": [
+          {
+            "name": "ctr",
+            "type": "str"
+          },
+          {
+            "name": "by",
+            "type": "int"
+          }
+        ],
+        "name": "Inc",
+        "picks": "record"
+      },
+      {
+        "name": "Reset",
+        "picks": "value",
+        "type": "str"
+      },
+      {
+        "name": "Peek",
+        "picks": "value",
+        "type": "str"
+      }
+    ],
+    "results": [
+      "Accepted",
+      "Rejected"
+    ],
+    "vars": [
+      {
+        "name": "counts",
+        "type": "str -> int"
+      },
+      {
+        "name": "writes",
+        "type": "str -> int"
+      }
+    ]
+  },
   "models": {
     "priv/examples/counter/model-tests.qnt": "sha256:9e9628d2abd708ad7601f1863db2ddc3d2c477b7e6667e139da40a7eb383acbc",
     "priv/examples/counter/model.qnt": "sha256:89fc19fbb313282b47b315f76398d3b136a0a9dc36cbfae0f664accdc2ffc512"

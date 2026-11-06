@@ -2,6 +2,7 @@ defmodule AshQuint.CoverageTest do
   use ExUnit.Case, async: true
 
   alias AshQuint.Coverage
+  alias AshQuint.Interface
   alias AshQuint.Manifest
 
   defp trace(file, steps, actions, outcomes) do
@@ -15,7 +16,21 @@ defmodule AshQuint.CoverageTest do
     }
   end
 
-  defp manifest(traces), do: %Manifest{quint: "0.33.1", seed: 1, traces: traces}
+  # `actions` are the interface's (all unit); by default Init and the
+  # actions the traces take.
+  defp manifest(traces, actions \\ nil) do
+    actions =
+      actions ||
+        ["Init" | traces |> Enum.flat_map(&Map.keys(&1.actions)) |> Enum.uniq()]
+
+    interface = %Interface{
+      actions: Enum.map(actions, &%{name: &1, picks: :unit, type: nil}),
+      results: ["Accepted", "Rejected"],
+      vars: []
+    }
+
+    %Manifest{quint: "0.33.1", seed: 1, traces: traces, interface: interface}
+  end
 
   test "sums actions and outcomes over the traces, rows sorted by action" do
     manifest =
@@ -32,6 +47,7 @@ defmodule AshQuint.CoverageTest do
               %{
                 traces: 2,
                 steps: 5,
+                all_actions: true,
                 rows: [
                   %{
                     action: "Inc",
@@ -100,6 +116,54 @@ defmodule AshQuint.CoverageTest do
              "m: 1 trace, 3 steps",
              "  Inc   2  accepted 1  no result 1",
              "  Peek  1  no result 1"
+           ]
+  end
+
+  test "an action no trace takes has a zero row" do
+    manifest =
+      manifest(
+        [trace("a", 10, %{"Inc" => 10}, %{"Inc" => %{"accepted" => 10}})],
+        ["Init", "Undo", "Inc"]
+      )
+
+    assert {:ok, %{rows: rows, all_actions: true} = coverage} = Coverage.from_manifest(manifest)
+
+    assert rows == [
+             %{action: "Inc", steps: 10, outcomes: %{"accepted" => 10}, no_result: 0},
+             %{action: "Undo", steps: 0, outcomes: %{}, no_result: 0}
+           ]
+
+    assert Coverage.format("m", coverage) == [
+             "m: 1 trace, 10 steps",
+             "  Inc   10  accepted 10",
+             "  Undo   0"
+           ]
+  end
+
+  test "the init action has no row" do
+    traces = [trace("a", 1, %{"Inc" => 1}, %{"Inc" => %{"accepted" => 1}})]
+
+    assert {:ok, %{rows: [%{action: "Inc"}]}} =
+             Coverage.from_manifest(manifest(traces, ["Init", "Inc"]))
+
+    assert {:ok, %{rows: [%{action: "Inc"}, %{action: "Init", steps: 0}]}} =
+             Coverage.from_manifest(manifest(traces, ["Start", "Init", "Inc"]),
+               init_action: "Start"
+             )
+  end
+
+  test "a format 2 manifest ends with the regeneration note" do
+    traces = [trace("a", 1, %{"Inc" => 1}, %{"Inc" => %{"accepted" => 1}})]
+    manifest = %{manifest(traces, ["Init", "Inc", "Undo"]) | version: 2, interface: nil}
+
+    assert {:ok, %{all_actions: false, rows: [%{action: "Inc"}]} = coverage} =
+             Coverage.from_manifest(manifest)
+
+    assert Coverage.format("counter", coverage) == [
+             "counter: 1 trace, 1 step",
+             "  Inc  1  accepted 1",
+             "  (actions no trace takes aren't listed: regenerate with " <>
+               "mix ash_quint.gen counter to record the model's actions)"
            ]
   end
 

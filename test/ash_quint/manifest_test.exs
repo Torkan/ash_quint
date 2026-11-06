@@ -1,6 +1,7 @@
 defmodule AshQuint.ManifestTest do
   use ExUnit.Case, async: true
 
+  alias AshQuint.Interface
   alias AshQuint.Manifest
 
   @path "test/fixtures/quint/counter/manifest.json"
@@ -23,6 +24,16 @@ defmodule AshQuint.ManifestTest do
     }
   end
 
+  @interface %Interface{
+    actions: [
+      %{name: "Init", picks: :unit, type: nil},
+      %{name: "Inc", picks: :record, fields: [%{name: "by", type: "int"}]},
+      %{name: "Reset", picks: :value, type: "str"}
+    ],
+    results: ["Accepted", "Rejected"],
+    vars: [%{name: "counts", type: "str -> int"}]
+  }
+
   defp manifest(traces, actions_order \\ :asc) do
     actions =
       1..40
@@ -31,6 +42,7 @@ defmodule AshQuint.ManifestTest do
       |> Enum.into(%{})
 
     %Manifest{
+      interface: @interface,
       quint: "0.33.1",
       seed: 20_261_102,
       models: %{
@@ -52,7 +64,7 @@ defmodule AshQuint.ManifestTest do
     b = Manifest.encode(manifest(Enum.reverse(@entries), :desc))
 
     assert a == b
-    assert String.starts_with?(a, "{\n  \"ash_quint\": 2,\n  \"models\": {\n")
+    assert String.starts_with?(a, "{\n  \"ash_quint\": 3,\n  \"interface\": {\n")
     assert String.ends_with?(a, "\n}\n")
 
     files = Regex.scan(~r/"file": "([^"]+)"/, a, capture: :all_but_first)
@@ -86,10 +98,52 @@ defmodule AshQuint.ManifestTest do
     end
   end
 
-  test "round-trips" do
+  test "round-trips with an interface" do
     manifest = %{manifest(@entries) | traces: Enum.sort_by(manifest(@entries).traces, & &1.file)}
 
-    assert Manifest.decode!(Manifest.encode(manifest), @path) == manifest
+    assert %Manifest{version: 3, interface: @interface} =
+             decoded = Manifest.decode!(Manifest.encode(manifest), @path)
+
+    assert decoded == manifest
+  end
+
+  test "encodes the interface with sorted keys" do
+    encoded = Manifest.encode(manifest(@entries))
+
+    assert encoded =~
+             ~s("interface": {\n    "actions": [\n      {\n        "name": "Init",\n) <>
+               ~s(        "picks": "unit"\n      },)
+
+    assert encoded =~
+             ~s(\n    ],\n    "results": [\n      "Accepted",\n      "Rejected"\n    ],\n)
+
+    assert encoded =~ ~s(\n    "vars": [\n      {\n        "name": "counts",\n)
+    assert encoded =~ ~s(\n  },\n  "models": {\n)
+  end
+
+  test "refuses to encode without an interface" do
+    assert_raise ArgumentError, "manifest has no interface", fn ->
+      Manifest.encode(%{manifest(@entries) | interface: nil})
+    end
+  end
+
+  test "a version 3 manifest needs an interface" do
+    assert_raise ArgumentError, "#{@path}: invalid manifest: interface must be an object", fn ->
+      Manifest.decode!(json(%{"ash_quint" => 3}), @path)
+    end
+
+    assert_raise ArgumentError,
+                 "#{@path}: invalid manifest: interface.actions[0].picks must be one of " <>
+                   "map, record, unit, value",
+                 fn ->
+                   interface = %{
+                     "actions" => [%{"name" => "A", "picks" => "x"}],
+                     "results" => nil,
+                     "vars" => []
+                   }
+
+                   Manifest.decode!(json(%{"ash_quint" => 3, "interface" => interface}), @path)
+                 end
   end
 
   test "writes concurrent and max_in_flight only for concurrent traces" do
@@ -186,6 +240,7 @@ defmodule AshQuint.ManifestTest do
     manifest = Manifest.decode!(json(%{}), @path)
 
     assert manifest.version == 2
+    assert manifest.interface == nil
     assert [%{outcomes: %{"Inc" => %{"accepted" => 1}}}] = manifest.traces
   end
 
@@ -203,12 +258,13 @@ defmodule AshQuint.ManifestTest do
     manifest = Manifest.decode!(json(%{"ash_quint" => 1, "traces" => traces}), @path)
 
     assert manifest.version == 1
+    assert manifest.interface == nil
     assert [%{actions: %{"Inc" => 1}, outcomes: nil}] = manifest.traces
   end
 
   test "refuses an unknown version" do
-    assert_raise ArgumentError, "#{@path}: unsupported manifest version 3", fn ->
-      Manifest.decode!(json(%{"ash_quint" => 3}), @path)
+    assert_raise ArgumentError, "#{@path}: unsupported manifest version 4", fn ->
+      Manifest.decode!(json(%{"ash_quint" => 4}), @path)
     end
   end
 

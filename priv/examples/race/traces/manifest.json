@@ -1,5 +1,60 @@
 {
-  "ash_quint": 2,
+  "ash_quint": 3,
+  "interface": {
+    "actions": [
+      {
+        "name": "Init",
+        "picks": "unit"
+      },
+      {
+        "fields": [
+          {
+            "name": "op",
+            "type": "str"
+          },
+          {
+            "name": "by",
+            "type": "int"
+          }
+        ],
+        "name": "IncStart",
+        "picks": "record"
+      },
+      {
+        "fields": [
+          {
+            "name": "op",
+            "type": "str"
+          }
+        ],
+        "name": "IncDone",
+        "picks": "record"
+      }
+    ],
+    "results": [
+      "Accepted",
+      "Rejected",
+      "Pending"
+    ],
+    "vars": [
+      {
+        "name": "count",
+        "type": "int"
+      },
+      {
+        "name": "writes",
+        "type": "int"
+      },
+      {
+        "name": "inflight",
+        "type": "str -> int"
+      },
+      {
+        "name": "finished",
+        "type": "Set[str]"
+      }
+    ]
+  },
   "models": {
     "priv/examples/race/model-tests.qnt": "sha256:91d7eb8cab3c65c8b54ac279b8b411392e69c37c886b7c7d3be8439608c2296d",
     "priv/examples/race/model.qnt": "sha256:b09ab33571ce6fb6ff53ebe79d2f486c41297796fb0fb96b27a7ab5d19d4f787"

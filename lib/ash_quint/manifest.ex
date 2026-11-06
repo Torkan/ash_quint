@@ -4,7 +4,17 @@ defmodule AshQuint.Manifest do
   `mix ash_quint.gen` generated for a model:
 
       {
-        "ash_quint": 2,
+        "ash_quint": 3,
+        "interface": {
+          "actions": [
+            { "name": "Init", "picks": "unit" },
+            { "fields": [{ "name": "ctr", "type": "str" }, { "name": "by", "type": "int" }],
+              "name": "Inc", "picks": "record" },
+            { "name": "Reset", "picks": "value", "type": "str" }
+          ],
+          "results": ["Accepted", "Rejected"],
+          "vars": [{ "name": "counts", "type": "str -> int" }]
+        },
         "models": { "test/quint/counter/model.qnt": "sha256:…" },
         "quint": "0.33.1",
         "seed": 20261102,
@@ -23,7 +33,12 @@ defmodule AshQuint.Manifest do
         ]
       }
 
-  `models` maps each model file, as configured, to its hash. `actions`
+  `interface` is the model's interface, read from Quint by
+  `mix ash_quint.gen` (see `AshQuint.Interface`): its actions with their
+  pick shapes, its result variants (`null` without a result variable) and
+  its other variables, with their types as Quint text. Its lists keep the
+  model's declaration order. `models` maps each model file, as configured,
+  to its hash. `actions`
   counts each action tag over the trace's steps; `outcomes` counts, per
   action, the steps' result labels (see `AshQuint.Step.result_label/1`).
   A step without a result (the model has no `lastResult`) is counted in
@@ -32,7 +47,7 @@ defmodule AshQuint.Manifest do
   A trace is `concurrent` when a call is in flight in it: some step's
   result is `Pending` (see `AshQuint.Step`). `max_in_flight` is the most
   operations in flight at once. Both keys are written only for concurrent
-  traces and are optional on read, in either format version: absent means
+  traces and are optional on read, in every format version: absent means
   `concurrent: false` and `max_in_flight: 0`.
 
   The encoding is deterministic: keys sorted at every level, traces sorted by
@@ -40,17 +55,20 @@ defmodule AshQuint.Manifest do
 
   ## Format versions
 
-  `"ash_quint"` is the format version. `encode/1` writes version 2.
-  `decode!/2` also reads version 1, written before `outcomes` was
-  recorded: its entries get `outcomes: nil` and its `version` stays 1, so
-  replays keep working and `mix ash_quint.coverage` can ask for a
-  regeneration.
+  `"ash_quint"` is the format version. `encode/1` writes version 3.
+  `decode!/2` also reads version 2, written before the `interface` was
+  recorded (it decodes with `interface: nil`), and version 1, written
+  before `outcomes` was recorded: its entries get `outcomes: nil`. A
+  decoded manifest keeps its `version`, so replays keep working and
+  `mix ash_quint.coverage` can ask for a regeneration.
   """
 
-  @version 2
-  @versions [1, 2]
+  alias AshQuint.Interface
 
-  defstruct version: @version, quint: nil, seed: nil, models: %{}, traces: []
+  @version 3
+  @versions [1, 2, 3]
+
+  defstruct version: @version, quint: nil, seed: nil, models: %{}, traces: [], interface: nil
 
   @type outcomes :: %{String.t() => %{String.t() => pos_integer()}}
 
@@ -66,7 +84,8 @@ defmodule AshQuint.Manifest do
         }
 
   @type t :: %__MODULE__{
-          version: 1 | 2,
+          version: 1 | 2 | 3,
+          interface: AshQuint.Interface.t() | nil,
           quint: String.t(),
           seed: integer(),
           models: %{String.t() => String.t()},
@@ -86,10 +105,13 @@ defmodule AshQuint.Manifest do
   @doc """
   Encodes `manifest` as pretty-printed JSON with sorted keys, traces sorted
   by file and a trailing newline. Always writes the current format
-  version, so every entry needs its `outcomes`: raises `ArgumentError`
-  for an entry without them.
+  version, so the manifest needs its `interface` and every entry its
+  `outcomes`: raises `ArgumentError` without them.
   """
   @spec encode(t()) :: String.t()
+  def encode(%__MODULE__{interface: nil}),
+    do: raise(ArgumentError, "manifest has no interface")
+
   def encode(%__MODULE__{} = manifest) do
     traces =
       manifest.traces
@@ -110,6 +132,7 @@ defmodule AshQuint.Manifest do
     json =
       ordered(%{
         "ash_quint" => @version,
+        "interface" => Interface.to_json(manifest.interface),
         "models" => ordered(manifest.models),
         "quint" => manifest.quint,
         "seed" => manifest.seed,
@@ -142,8 +165,9 @@ defmodule AshQuint.Manifest do
 
   @doc """
   Decodes manifest JSON. `path` is used in error messages. Raises
-  `ArgumentError` for invalid JSON, a version other than 1 or 2, an
-  unknown trace source or a malformed field.
+  `ArgumentError` for invalid JSON, a version other than 1, 2 or 3, an
+  unknown trace source or a malformed field (version 3 needs an
+  `interface`).
   """
   @spec decode!(binary(), String.t()) :: t()
   def decode!(binary, path) do
@@ -170,6 +194,7 @@ defmodule AshQuint.Manifest do
 
     %__MODULE__{
       version: version,
+      interface: if(version >= 3, do: Interface.from_json!(Map.get(json, "interface"), path)),
       quint: quint,
       seed: seed,
       models: models,

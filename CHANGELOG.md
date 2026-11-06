@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- The manifest is format 3: `mix ash_quint.gen` runs
+  `quint compile --target=json` for each model after its traces and
+  records the model's `interface`: its actions with their pick shapes
+  (`unit`, `record` with typed fields, `value` or `map`), its result
+  variants and its other variables, with types as Quint text
+  (`AshQuint.Interface`). Formats 1 and 2 still decode (with no
+  interface); `mix ash_quint.gen --check` reports them as changed. A
+  failing compile, or a JSON IR whose shape the interface can't be read
+  from, is a gen error.
+- `mix ash_quint.coverage` and gen's table list every model action but
+  the init action: one no trace takes has a row of 0 steps
+  (`Undo    0`). `AshQuint.Coverage.from_manifest/2` takes
+  `init_action:`; its coverage has `all_actions`. A format 2 manifest's
+  table lists the taken actions only and ends with a note asking for a
+  regeneration.
 - **Breaking:** the sensitivity check reports model variables that no
   projection covers (`variable "inflight" is never projected`, target
   `{:var, name}`): the traces' variables, without the action and result

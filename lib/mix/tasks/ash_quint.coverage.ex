@@ -17,6 +17,11 @@ defmodule Mix.Tasks.AshQuint.Coverage do
         Peek   20  accepted 20
         Reset  10  accepted 10
 
+  Every model action but the model's `init_action` has a row, with 0
+  steps when no trace takes it. A format 2 manifest, written before the
+  model's actions were recorded, lists only the actions the traces take
+  and ends with a note asking for a regeneration.
+
   A model whose manifest is missing, invalid or written before outcomes
   were recorded is an error asking you to regenerate it with
   `mix ash_quint.gen`; the other models' tables are printed first.
@@ -65,7 +70,7 @@ defmodule Mix.Tasks.AshQuint.Coverage do
 
     with {:ok, binary} <- read(config, path, model, regen),
          {:ok, manifest} <- decode(binary, path, regen) do
-      case Coverage.from_manifest(manifest) do
+      case Coverage.from_manifest(manifest, init_action: model.init_action) do
         {:ok, coverage} ->
           {:ok, coverage}
 

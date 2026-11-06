@@ -49,6 +49,29 @@ defmodule Mix.Tasks.AshQuint.CoverageTest do
            ]
   end
 
+  test "skips each model's init action", %{root: root} do
+    config = Path.join(root, "ash_quint.exs")
+
+    File.write!(
+      config,
+      String.replace(
+        File.read!(config),
+        ~s(out: "priv/examples/counter/traces",),
+        ~s(out: "priv/examples/counter/traces", init_action: "Peek",)
+      )
+    )
+
+    assert coverage(root, ["counter"]) == :ok
+
+    assert infos() == [
+             "counter: 9 traces, 53 steps",
+             "  Inc    23  accepted 20  rejected:over_limit 3",
+             "  Init    0",
+             "  Peek   20  accepted 20",
+             "  Reset  10  accepted 10"
+           ]
+  end
+
   test "takes model names", %{root: root} do
     assert coverage(root, ["counter"]) == :ok
     assert [_header, _inc, _peek, _reset] = infos()

@@ -241,10 +241,45 @@ For every configured model (or only those named), from the project root:
 
 The same seed is passed to `quint test` too, so scenarios that use `nondet`
 regenerate byte for byte. Each file is normalized (Quint's `description` and
-`timestamp` are removed from `#meta`; everything else is kept as written),
-and `<out>/manifest.json` records the Quint version, the seed, a hash of
-each model file, and each trace's name, source, step count, actions and,
-per action, outcomes (see Coverage below).
+`timestamp` are removed from `#meta`; everything else is kept as written).
+
+Then, to read the model's interface, the task runs
+`quint compile --target=json --main=<main> <file> --out=…` with `<main>`
+and `<file>` from `random:` (the model file), else `witnesses:` (the model
+file), else `scenarios:` (the tests file). A failing compile is an error
+with Quint's output. From the compiled model it records:
+
+- **actions:** the variants of the action variable, in declaration order,
+  each with its picks: `unit` (no picks), `record` (its fields and their
+  types), `value` (one pick, with its type) or `map` (a Quint `Map`).
+- **results:** the variant names of the result variable, or `null` without
+  one.
+- **vars:** every other variable, with its type.
+
+Types are written as Quint text (`str -> int`, `Set[str]`). The JSON IR is
+Quint's internal format; if a Quint version changes its shape, the task
+fails with `could not read the model interface from Quint <version>'s JSON
+IR: …`.
+
+`<out>/manifest.json` (format 3) records the Quint version, the seed, a
+hash of each model file, the interface, and each trace's name, source,
+step count, actions and, per action, outcomes (see Coverage below). For
+the counter example the interface is:
+
+```json
+"interface": {
+  "actions": [
+    {"name": "Init", "picks": "unit"},
+    {"fields": [{"name": "ctr", "type": "str"}, {"name": "by", "type": "int"}],
+     "name": "Inc", "picks": "record"},
+    {"name": "Reset", "picks": "value", "type": "str"},
+    {"name": "Peek", "picks": "value", "type": "str"}
+  ],
+  "results": ["Accepted", "Rejected"],
+  "vars": [{"name": "counts", "type": "str -> int"},
+           {"name": "writes", "type": "str -> int"}]
+}
+```
 
 - Without flags, the task replaces the `*.itf.json` files and
   `manifest.json` in each model's `out` directory and leaves other files
@@ -274,7 +309,8 @@ counter: 9 traces, 53 steps
   Reset  10  accepted 10
 ```
 
-Each row is an action the traces take, with its step count and then each
+Each row is one of the model's actions (from the manifest's interface,
+without the model's `init_action`), with its step count and then each
 result it reaches with its count. A result is labelled `accepted` for
 `Accepted` and `rejected:<code>` for `Rejected(code)`, so
 `Rejected("over_limit")` is `rejected:over_limit`. A step that keeps its
@@ -291,9 +327,17 @@ race: 6 traces, 22 steps
 There are more starts than completions because the `witOverlap` witness
 ends with both calls in flight. A label missing from a
 row is an outcome no trace reaches, for example a rejection the random
-runs never hit: add a witness or a scenario for it. Actions the traces
-never take aren't listed (the manifest doesn't know the model's actions),
-so compare the rows with the model's `Action` type.
+runs never hit: add a witness or a scenario for it. An action no trace
+takes has a row of 0 steps and no outcomes, as an `Undo` action would if
+the counter model had one that no trace took:
+
+```text
+counter: 9 traces, 53 steps
+  Inc    23  accepted 20  rejected:over_limit 3
+  Peek   20  accepted 20
+  Reset  10  accepted 10
+  Undo    0
+```
 
 For a model without `lastResult`, the rows have the step counts only. In a
 model with results, steps without one show as `no result <n>`.
@@ -304,7 +348,10 @@ regeneration shows at once what the new traces reach. `--check` and
 
 A manifest written by ash_quint 0.1.0 (format 1) has no outcomes:
 replays still work with it, but `mix ash_quint.coverage` asks you to
-regenerate it with `MIX_ENV=test mix ash_quint.gen <model>`.
+regenerate it with `MIX_ENV=test mix ash_quint.gen <model>`. A format 2
+manifest has no interface: its table lists only the actions the traces
+take and ends with `(actions no trace takes aren't listed: regenerate with
+mix ash_quint.gen <model> to record the model's actions)`.
 
 ## Writing an adapter
 

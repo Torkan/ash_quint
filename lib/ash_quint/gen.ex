@@ -17,18 +17,27 @@ defmodule AshQuint.Gen do
       --out-itf=<tmp>/scenario_{test}_{seq}.itf.json`; each file is renamed
       to `scenario_<test>.itf.json`. Any non-zero exit is an error.
 
-  Every file is normalized with `normalize/1`. Nothing is written by
-  `generate/3`; `write!/2` writes one model's result.
+  Every file is normalized with `normalize/1`. Then, to record the model's
+  interface (see `AshQuint.Interface`) in the manifest, it runs:
+
+    * **interface:** `quint compile --target=json --main=<main> <file>
+      --out=<tmp>/<index>.interface.json`, with `<main>` and `<file>` from
+      `random:` (the model file), else `witnesses:` (the model file), else
+      `scenarios:` (the tests file). Any non-zero exit is an error, as is
+      an IR the interface can't be read from (see `interface_command/3`).
+
+  Nothing is written by `generate/3`; `write!/2` writes one model's result.
   """
 
   alias AshQuint.Config
   alias AshQuint.Config.Model
+  alias AshQuint.Interface
   alias AshQuint.ITF
   alias AshQuint.Manifest
   alias AshQuint.Step
 
   @type command :: %{
-          kind: :random | :witness | :scenario,
+          kind: :random | :witness | :scenario | :interface,
           name: String.t() | nil,
           cmd: [String.t()],
           args: [String.t()],
@@ -97,6 +106,30 @@ defmodule AshQuint.Gen do
     random ++ witnesses ++ scenarios
   end
 
+  @doc """
+  The `quint compile` command that writes `model`'s JSON IR to `path`,
+  from which `generate/3` reads its interface. The main module and file
+  come from `random:` (the model file), else `witnesses:` (the model
+  file), else `scenarios:` (the tests file).
+  """
+  @spec interface_command(Config.t(), Model.t(), Path.t()) :: command()
+  def interface_command(%Config{} = config, %Model{} = model, path) do
+    {main, file} =
+      cond do
+        model.random -> {model.random[:main], model.model}
+        model.witnesses -> {model.witnesses[:main], model.model}
+        true -> {model.scenarios[:main], model.tests}
+      end
+
+    %{
+      kind: :interface,
+      name: nil,
+      cmd: Config.quint_cmd(config),
+      args: ["compile", "--target=json", "--main=#{main}", file, "--out=#{path}"],
+      out: path
+    }
+  end
+
   defp flags(opts, keys) do
     for key <- keys, value = opts[key], value != nil do
       "--#{String.replace(Atom.to_string(key), "_", "-")}=#{value}"
@@ -146,8 +179,10 @@ defmodule AshQuint.Gen do
     |> Enum.reduce_while({:ok, %{}}, fn {model, index}, {:ok, acc} ->
       model_tmp = Path.join(tmp, Integer.to_string(index))
       File.mkdir!(model_tmp)
+      # Beside the model's dir, not in it, so collect/2 never sees it.
+      ir_path = Path.join(tmp, "#{index}.interface.json")
 
-      case generate_model(config, model, model_tmp, runner) do
+      case generate_model(config, model, {model_tmp, ir_path}, runner) do
         {:ok, generated} -> {:cont, {:ok, Map.put(acc, model.name, generated)}}
         {:error, _reason} = error -> {:halt, error}
       end
@@ -158,11 +193,53 @@ defmodule AshQuint.Gen do
     System.cmd(cmd, args, opts ++ [stderr_to_stdout: true])
   end
 
-  defp generate_model(config, model, tmp, runner) do
+  defp generate_model(config, model, {tmp, ir_path}, runner) do
     with :ok <- check_files(config, model),
          :ok <- run_all(config, model, tmp, runner),
-         {:ok, files} <- collect(model, tmp) do
-      build(config, model, files)
+         {:ok, files} <- collect(model, tmp),
+         {:ok, interface} <- interface(config, model, ir_path, runner) do
+      build(config, model, files, interface)
+    end
+  end
+
+  defp interface(config, model, path, runner) do
+    command = interface_command(config, model, path)
+
+    case run_quint(config, command.args, runner) do
+      {:ok, _output, 0} ->
+        opts = [
+          action_path: model.action_path,
+          result_path: model.result_path,
+          quint: config.quint
+        ]
+
+        with {:ok, ir} <- read_ir(path, config.quint),
+             {:ok, interface} <- Interface.from_ir(ir, opts) do
+          {:ok, interface}
+        else
+          {:error, reason} -> {:error, "model #{inspect(model.name)}: #{reason}"}
+        end
+
+      {:ok, output, _status} ->
+        {:error, "quint compile for #{inspect(model.name)} failed:\n#{output}"}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp read_ir(path, quint) do
+    unreadable = "could not read the model interface from Quint #{quint}'s JSON IR: "
+
+    case File.read(path) do
+      {:ok, binary} ->
+        case Jason.decode(binary) do
+          {:ok, ir} -> {:ok, ir}
+          {:error, _error} -> {:error, unreadable <> "invalid JSON in the --out file"}
+        end
+
+      {:error, reason} ->
+        {:error, unreadable <> "no --out file (#{:file.format_error(reason)})"}
     end
   end
 
@@ -188,13 +265,30 @@ defmodule AshQuint.Gen do
     end)
   end
 
-  defp run(%{cmd: [exe | pre]} = command, config, model, runner) do
-    {output, status} = runner.(exe, pre ++ command.args, cd: config.root)
-    check_run(command, model, IO.iodata_to_binary(output), status)
+  defp run(command, config, model, runner) do
+    case run_quint(config, command.args, runner) do
+      {:ok, output, status} -> check_run(command, model, output, status)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Runs Quint (`AshQuint.Config.quint_cmd/1`) with `args` in the project
+  root through `runner` (see `generate/3`), returning its output and exit
+  status. A missing executable is an error; any other runner error is
+  raised.
+  """
+  @spec run_quint(Config.t(), [String.t()], runner()) ::
+          {:ok, String.t(), non_neg_integer()} | {:error, String.t()}
+  def run_quint(%Config{} = config, args, runner) do
+    [exe | pre] = Config.quint_cmd(config)
+    {output, status} = runner.(exe, pre ++ args, cd: config.root)
+    {:ok, IO.iodata_to_binary(output), status}
   rescue
     error in ErlangError ->
       if error.original == :enoent do
-        {:error, "could not run Quint (#{Enum.join(command.cmd, " ")}): executable not found"}
+        {:error,
+         "could not run Quint (#{Enum.join(Config.quint_cmd(config), " ")}): executable not found"}
       else
         reraise error, __STACKTRACE__
       end
@@ -255,7 +349,7 @@ defmodule AshQuint.Gen do
     end
   end
 
-  defp build(config, model, files) do
+  defp build(config, model, files, interface) do
     entries =
       Enum.map(files, fn {file, binary} ->
         {source, name} = source_and_name(file)
@@ -266,6 +360,7 @@ defmodule AshQuint.Gen do
     paths = [model.model] ++ if(model.scenarios, do: [model.tests], else: [])
 
     manifest = %Manifest{
+      interface: interface,
       quint: config.quint,
       seed: model.seed,
       models: Map.new(paths, &{&1, Manifest.hash_file(Path.join(config.root, &1))}),

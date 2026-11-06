@@ -4,6 +4,7 @@ defmodule AshQuint.GenTest do
   alias AshQuint.Config
   alias AshQuint.Config.Model
   alias AshQuint.Gen
+  alias AshQuint.Interface
   alias AshQuint.Manifest
   alias AshQuint.Trace
 
@@ -86,8 +87,28 @@ defmodule AshQuint.GenTest do
     end)
   end
 
-  # Writes canned traces into each command's --out-itf path. `overrides`
-  # maps :random, :witness or :scenario to a function of the args returning
+  defp out(args) do
+    Enum.find_value(args, fn
+      "--out=" <> path -> path
+      _arg -> nil
+    end)
+  end
+
+  @counter_ir "test/fixtures/quint_ir/counter.json"
+
+  defp counter_interface do
+    {:ok, interface} =
+      @counter_ir
+      |> File.read!()
+      |> Jason.decode!()
+      |> Interface.from_ir(action_path: ["lastAction"], result_path: ["lastResult"])
+
+    interface
+  end
+
+  # Writes canned traces into each command's --out-itf path, and counter's
+  # IR into a compile's --out path. `overrides` maps :random, :witness,
+  # :scenario or :interface to a function of the args returning
   # `{output, exit}` (and writing whatever it likes).
   defp stub(test_pid, overrides \\ %{}) do
     fn cmd, args, opts ->
@@ -97,6 +118,7 @@ defmodule AshQuint.GenTest do
 
       key =
         cond do
+          kind == "compile" -> :interface
           kind == "test" -> :scenario
           Enum.any?(args, &String.starts_with?(&1, "--invariant=")) -> :witness
           true -> :random
@@ -104,9 +126,15 @@ defmodule AshQuint.GenTest do
 
       case Map.fetch(overrides, key) do
         {:ok, fun} -> fun.(args)
+        :error when key == :interface -> default_run(key, out(args), source)
         :error -> default_run(key, out_itf(args), source)
       end
     end
+  end
+
+  defp default_run(:interface, path, _source) do
+    File.cp!(@counter_ir, path)
+    {"<ir>", 0}
   end
 
   defp default_run(:random, pattern, source) do
@@ -256,6 +284,40 @@ defmodule AshQuint.GenTest do
     end
   end
 
+  describe "interface_command/3" do
+    test "the interface command uses random's main and the model file", %{tmp_dir: tmp_dir} do
+      config = config(tmp_dir)
+
+      assert Gen.interface_command(config, config.models.counter, "/t/0.interface.json") == %{
+               kind: :interface,
+               name: nil,
+               cmd: ["npx", "--yes", "@informalsystems/quint@0.33.1"],
+               args: [
+                 "compile",
+                 "--target=json",
+                 "--main=counter",
+                 @model_file,
+                 "--out=/t/0.interface.json"
+               ],
+               out: "/t/0.interface.json"
+             }
+    end
+
+    test "without random, witnesses' main; with scenarios only, the tests file", %{
+      tmp_dir: tmp_dir
+    } do
+      config = config(tmp_dir, random: nil, witnesses: [main: "spec", names: ["w"]])
+
+      assert %{args: ["compile", "--target=json", "--main=spec", @model_file, "--out=/o"]} =
+               Gen.interface_command(config, config.models.counter, "/o")
+
+      config = config(tmp_dir, random: nil, witnesses: nil)
+
+      assert %{args: ["compile", "--target=json", "--main=tests", @tests_file, "--out=/o"]} =
+               Gen.interface_command(config, config.models.counter, "/o")
+    end
+  end
+
   describe "normalize/1" do
     test "normalize drops description and timestamp only" do
       original = File.read!("test/fixtures/itf/run.itf.json")
@@ -301,6 +363,8 @@ defmodule AshQuint.GenTest do
       refute files["witness_witA.itf.json"] =~ "timestamp"
 
       assert Manifest.decode!(manifest, "manifest.json") == %Manifest{
+               version: 3,
+               interface: counter_interface(),
                quint: "0.33.1",
                seed: 7,
                models: %{
@@ -320,6 +384,99 @@ defmodule AshQuint.GenTest do
              }
 
       assert manifest == Manifest.encode(Manifest.decode!(manifest, "manifest.json"))
+    end
+
+    test "compiles after the traces and records the interface", %{root: root, tmp: tmp} do
+      config = config(root)
+
+      assert {:ok, %{counter: %{files: files, manifest: manifest}}} =
+               Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp)
+
+      ran = collect_ran()
+      assert length(ran) == 4
+      [_npx, _pkg, "compile" | _] = compile = List.last(ran)
+      assert Enum.all?(Enum.drop(ran, -1), &(Enum.at(&1, 2) != "compile"))
+      # <tmp>/ash_quint_gen_<hex>/0.interface.json, beside the model's dir
+      assert compile |> out() |> Path.basename() == "0.interface.json"
+
+      assert Manifest.decode!(manifest, "m").interface == counter_interface()
+      refute Enum.any?(Map.keys(files), &String.contains?(&1, "interface"))
+    end
+
+    test "a failing compile is an error with Quint's output", %{root: root, tmp: tmp} do
+      config = config(root)
+      runner = stub(self(), %{interface: fn _args -> {"parse error", 1} end})
+
+      assert Gen.generate(config, [config.models.counter], runner: runner, tmp_dir: tmp) ==
+               {:error, "quint compile for :counter failed:\nparse error"}
+    end
+
+    test "an unreadable IR is an error", %{root: root, tmp: tmp} do
+      config = config(root)
+
+      runner =
+        stub(self(), %{
+          interface: fn args ->
+            File.write!(out(args), "{}")
+            {"{}", 0}
+          end
+        })
+
+      assert Gen.generate(config, [config.models.counter], runner: runner, tmp_dir: tmp) ==
+               {:error,
+                "model :counter: could not read the model interface from Quint 0.33.1's " <>
+                  "JSON IR: no modules list"}
+    end
+
+    test "an IR file that is missing or isn't JSON is an error", %{root: root, tmp: tmp} do
+      config = config(root)
+      message = "model :counter: could not read the model interface from Quint 0.33.1's JSON IR: "
+
+      runner =
+        stub(self(), %{
+          interface: fn args ->
+            File.write!(out(args), "{")
+            {"", 0}
+          end
+        })
+
+      assert Gen.generate(config, [config.models.counter], runner: runner, tmp_dir: tmp) ==
+               {:error, message <> "invalid JSON in the --out file"}
+
+      runner = stub(self(), %{interface: fn _args -> {"", 0} end})
+
+      assert Gen.generate(config, [config.models.counter], runner: runner, tmp_dir: tmp) ==
+               {:error, message <> "no --out file (no such file or directory)"}
+    end
+
+    test "an action var that isn't a sum is an error", %{root: root, tmp: tmp} do
+      config = config(root)
+
+      ir = %{
+        "modules" => [
+          %{
+            "name" => "counter",
+            "declarations" => [%{"kind" => "var", "name" => "lastAction", "id" => 1}]
+          }
+        ],
+        "types" => %{
+          "1" => %{
+            "type" => %{"kind" => "fun", "arg" => %{"kind" => "str"}, "res" => %{"kind" => "int"}}
+          }
+        }
+      }
+
+      runner =
+        stub(self(), %{
+          interface: fn args ->
+            File.write!(out(args), Jason.encode!(ir))
+            {"", 0}
+          end
+        })
+
+      assert Gen.generate(config, [config.models.counter], runner: runner, tmp_dir: tmp) ==
+               {:error,
+                "model :counter: the action at lastAction must be a sum type, got str -> int"}
     end
 
     test "runs the Quint command in the project root", %{root: root, tmp: tmp} do
@@ -757,5 +914,13 @@ defmodule AshQuint.GenTest do
       concurrent: false,
       max_in_flight: 0
     }
+  end
+
+  defp collect_ran(acc \\ []) do
+    receive do
+      {:ran, _cmd, args, _opts} -> collect_ran([args | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 end

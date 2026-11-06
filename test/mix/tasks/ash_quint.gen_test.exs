@@ -85,6 +85,27 @@ defmodule Mix.Tasks.AshQuint.GenTest do
       assert infos() == ["ash_quint.gen: counter (#{@traces}):", "  change manifest.json"]
     end
 
+    # The interfaces asserted in AshQuint.InterfaceTest, from the IR fixtures.
+    test "records the counter and race interfaces", %{root: root} do
+      for model <- ["counter", "race"],
+          do: File.rm_rf!(Path.join([root, "priv/examples", model, "traces"]))
+
+      gen(root, ["counter", "race"])
+
+      for model <- ["counter", "race"] do
+        path = Path.join([root, "priv/examples", model, "traces/manifest.json"])
+
+        {:ok, interface} =
+          "test/fixtures/quint_ir/#{model}.json"
+          |> File.read!()
+          |> Jason.decode!()
+          |> AshQuint.Interface.from_ir(action_path: ["lastAction"], result_path: ["lastResult"])
+
+        assert %AshQuint.Manifest{version: 3, interface: ^interface} =
+                 AshQuint.Manifest.read!(path)
+      end
+    end
+
     test "--dry-run writes nothing", %{root: root} do
       file = Path.join([root, @traces, "witness_witOverLimit.itf.json"])
       File.rm!(file)

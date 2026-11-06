@@ -9,7 +9,9 @@ defmodule Mix.Tasks.AshQuint.Gen do
 
   Reads `ash_quint.exs` in the current directory and runs every configured
   model, or only the models named. See `AshQuint.Gen` for the Quint
-  commands.
+  commands: after a model's traces, `quint compile --target=json` reads
+  the model's interface (its actions, results and variables; see
+  `AshQuint.Interface`), which the manifest records.
 
     * Without flags, replaces the `*.itf.json` files and `manifest.json` in
       each model's `out` directory. Other files there are left alone.
@@ -24,8 +26,9 @@ defmodule Mix.Tasks.AshQuint.Gen do
   the file changes.
 
   Nothing is written unless every model generates. Quint failing or not
-  being runnable, a failing scenario, a witness not reached and a random run
-  exiting non-zero all raise with Quint's output.
+  being runnable, a failing scenario, a witness not reached, a random run
+  or a compile exiting non-zero all raise with Quint's output, as does an
+  interface that can't be read from the compiled model.
 
   `ash_quint` is usually a test-only dependency, so run the task as
   `MIX_ENV=test mix ash_quint.gen`, or add
@@ -70,7 +73,7 @@ defmodule Mix.Tasks.AshQuint.Gen do
 
   defp print_coverage(model, result) do
     manifest = Manifest.decode!(result.manifest, Path.join(model.out, "manifest.json"))
-    {:ok, coverage} = Coverage.from_manifest(manifest)
+    {:ok, coverage} = Coverage.from_manifest(manifest, init_action: model.init_action)
     Enum.each(Coverage.format(Atom.to_string(model.name), coverage), &Mix.shell().info(&1))
   end
 
