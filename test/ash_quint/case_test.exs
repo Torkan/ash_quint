@@ -426,6 +426,50 @@ defmodule AshQuint.CaseTest do
     assert Path.expand("test/fixtures/case/missing_skip/manifest.json") in resources
   end
 
+  describe "explore:" do
+    test "the explore test is tagged and has no timeout" do
+      tests = tests(compile(:ok, "use ExUnit.Case, register: false", ", explore: true"))
+
+      assert %{quint_explore: :ok, quint_model: :ok, timeout: :infinity} =
+               tags = tests[:"test explore ok"]
+
+      refute Map.has_key?(tags, :quint)
+
+      tests =
+        tests(compile(:ok, "use ExUnit.Case, register: false", ", explore: [max_steps: 4]"))
+
+      assert Map.has_key?(tests, :"test explore ok")
+    end
+
+    test "no explore test without explore:" do
+      for extra <- ["", ", explore: false"] do
+        tests = tests(compile(:ok, "use ExUnit.Case, register: false", extra))
+        refute Enum.any?(Map.keys(tests), &(Atom.to_string(&1) =~ "explore"))
+      end
+    end
+
+    test "explore: compile errors" do
+      for {model, extra, description} <- [
+            {:ok, "[foo: 1]", "unknown explore option :foo; expected max_steps or batch"},
+            {:ok, "[batch: 0]", "explore option batch must be a positive integer, got 0"},
+            {:ok, "[max_steps: @steps]",
+             "explore option max_steps must be a positive integer, got @steps"},
+            {:ok, ":yes",
+             "explore must be true, false or a keyword list of max_steps and batch, got :yes"},
+            {:ok, "[1]",
+             "explore must be true, false or a keyword list of max_steps and batch, got [1]"},
+            {:concurrent, "true", "explore needs random: for :concurrent in ash_quint.exs"}
+          ] do
+        error =
+          assert_raise CompileError, fn ->
+            compile(model, "use ExUnit.Case, register: false", ", explore: #{extra}")
+          end
+
+        assert error.description == description
+      end
+    end
+  end
+
   describe "concurrent traces" do
     # Compiles a test module for `model` with `adapter` and extra options
     # given as source.

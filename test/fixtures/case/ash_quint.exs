@@ -9,7 +9,7 @@ end
 [
   quint: "0.33.1",
   models: [
-    ok: model.(:ok, []),
+    ok: model.(:ok, random: [main: "toy", max_steps: 3]),
     stale: model.(:stale, []),
     missing_fail: model.(:missing_fail, []),
     missing_skip: model.(:missing_skip, on_missing_model: :skip),

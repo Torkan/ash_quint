@@ -220,6 +220,35 @@ defmodule AshQuint.GenTest do
              ]
     end
 
+    test "commands/3's random args are random_args/3's", %{tmp_dir: tmp_dir} do
+      config = config(tmp_dir)
+      model = config.models.counter
+      [random | _] = Gen.commands(config, model, "/tmp/g")
+
+      assert random.args ==
+               Gen.random_args(model, model.seed, out: "/tmp/g/random_{seq}.itf.json")
+    end
+
+    test "random_args/3 overrides n_traces, max_samples and max_steps", %{tmp_dir: tmp_dir} do
+      model = config(tmp_dir).models.counter
+
+      assert Gen.random_args(model, 99,
+               n_traces: 3,
+               max_samples: 3,
+               max_steps: 4,
+               out: "x/e_{seq}.itf.json"
+             ) == [
+               "run",
+               @model_file,
+               "--main=counter",
+               "--seed=99",
+               "--max-steps=4",
+               "--max-samples=3",
+               "--n-traces=3",
+               "--out-itf=x/e_{seq}.itf.json"
+             ]
+    end
+
     test "leaves out unset options and unset sources", %{tmp_dir: tmp_dir} do
       config =
         config(tmp_dir,

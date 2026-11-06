@@ -2,7 +2,9 @@ defmodule AshQuint.Postgres.RacePgTest do
   # The race example over Postgres, unboxed: the committed race traces
   # replay concurrently against AshQuint.Test.PgRaceCounter (each op task on
   # a connection of its own) and pass the sensitivity check; the
-  # read-modify-write :inc loses an update in raceTest.
+  # read-modify-write :inc loses an update in raceTest. An explore session
+  # replays the same traces as fresh ones (no Quint: a fake runner copies
+  # them).
   use AshQuint.Test.DataCase, unboxed: true
 
   use AshQuint.Case,
@@ -11,7 +13,7 @@ defmodule AshQuint.Postgres.RacePgTest do
     traces: :concurrent,
     sensitivity: [allow_untested: [vars: ~w(inflight finished)]]
 
-  alias AshQuint.{Config, Manifest, Replay, Trace}
+  alias AshQuint.{Config, Explore, Manifest, Replay, Trace}
   alias AshQuint.Test.RacePgAdapter
 
   @out "priv/examples/race/traces"
@@ -53,6 +55,42 @@ defmodule AshQuint.Postgres.RacePgTest do
     before = rows()
     assert {:ok, _report} = replay("scenario_raceTest.itf.json", [])
     assert {:error, _failure} = replay("scenario_raceTest.itf.json", action: :inc)
+    assert rows() == before
+  end
+
+  @tag :tmp_dir
+  test "an explore session replays the race traces through RacePgAdapter", %{tmp_dir: tmp_dir} do
+    files = Path.wildcard(Path.join(@out, "*.itf.json")) |> Enum.sort()
+    manifest = Manifest.read!(Path.join(@out, "manifest.json"))
+    concurrent = Enum.count(manifest.traces, & &1.concurrent)
+
+    runner = fn _exe, args, _opts ->
+      "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
+
+      files
+      |> Enum.with_index()
+      |> Enum.each(fn {file, i} ->
+        File.cp!(file, String.replace(out, "{seq}", Integer.to_string(i)))
+      end)
+
+      {"", 0}
+    end
+
+    before = rows()
+
+    report =
+      Explore.run(
+        %{runs: length(files), seed: 1, budget: nil, failures: 1},
+        [model: :race, adapter: RacePgAdapter, traces: :concurrent, batch: length(files)],
+        runner: runner,
+        build_dir: Path.join(tmp_dir, "build"),
+        tmp_dir: Path.join(tmp_dir, "tmp")
+      )
+
+    assert %{failures: [], error: nil, generated: generated} = report
+    assert generated == length(files)
+    assert report.replayed == concurrent
+    assert report.skipped == length(files) - concurrent
     assert rows() == before
   end
 end

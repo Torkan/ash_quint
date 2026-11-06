@@ -64,6 +64,16 @@ defmodule AshQuint.Case do
   Each module also defines the staleness test (and, with `sensitivity:`,
   its own sensitivity test over its traces).
 
+  With `explore:`, it also defines `"explore <model>"`, tagged
+  `quint_explore: <model>`, `quint_model: <model>` and `timeout: :infinity`,
+  which runs `AshQuint.Explore.run!/2`: it replays fresh `quint run`
+  traces of the model's `random:` source with the module's adapter,
+  `adapter_opts`, `replay` options and `traces:` selection, and fails
+  listing each failure as a candidate regression trace. Exclude it from
+  the suite in `test/test_helper.exs`
+  (`ExUnit.start(exclude: [:quint_explore])`) and run it with
+  `mix ash_quint.explore`; run any other way, it fails at once.
+
   The config, the manifest, every trace and every model file that exists
   are external resources, so the module recompiles when they change.
 
@@ -93,6 +103,11 @@ defmodule AshQuint.Case do
       the sensitivity check: `:all`, `:sequential` (those the manifest
       doesn't mark concurrent) or `:concurrent`. A selection with no trace
       is a compile error. Default `:all`.
+    * `:explore` — `true`, or `[max_steps: 20, batch: 25]`: defines the
+      explore test. `max_steps` is the length of the fresh traces (default
+      the model's `random:` `max_steps`, else Quint's), `batch` the traces
+      per `quint run` (default 20); both must be literal positive
+      integers. `true` is `[]`. The model needs `random:`. Default `false`.
     * `:replay` — `AshQuint.Replay.run/3` timeouts, in ms:
       `[settle_timeout: …, step_timeout: …, complete_timeout: …,
       gate_timeout: …]`. Any other key is a compile error. Default `[]`
@@ -110,6 +125,7 @@ defmodule AshQuint.Case do
     allow_untested = sensitivity!(Keyword.get(opts, :sensitivity, false), env)
     selection = traces!(Keyword.get(opts, :traces, :all), env)
     replay = replay!(Keyword.get(opts, :replay, []), env)
+    explore = explore!(Keyword.get(opts, :explore, false), env)
     config_path = Keyword.get(opts, :config, "ash_quint.exs")
 
     config =
@@ -126,6 +142,10 @@ defmodule AshQuint.Case do
         error in Mix.Error -> compile_error!(env, error.message)
       end
 
+    if explore != nil and model_config.random == nil do
+      compile_error!(env, "explore needs random: for #{inspect(model)} in ash_quint.exs")
+    end
+
     manifest = read_manifest!(model_config, config.root, env)
     manifest = select!(manifest, selection, model_config, env)
 
@@ -138,7 +158,10 @@ defmodule AshQuint.Case do
       config_file: Path.expand(config_path, config.root),
       manifest: manifest,
       allow_untested: allow_untested,
-      replay: replay
+      replay: replay,
+      explore: explore,
+      config_path: config_path,
+      selection: selection
     })
   end
 
@@ -213,6 +236,44 @@ defmodule AshQuint.Case do
       env,
       "replay must be a keyword list of #{@replay_shape}, got #{Macro.to_string(other)}"
     )
+  end
+
+  @explore_keys [:max_steps, :batch]
+  @explore_shape "true, false or a keyword list of max_steps and batch"
+
+  # nil (no explore test) or the explore options; values must be literal
+  # positive integers.
+  defp explore!(false, _env), do: nil
+  defp explore!(true, _env), do: []
+
+  defp explore!(opts, env) when is_list(opts) do
+    Enum.map(opts, fn
+      {key, value} when key in @explore_keys ->
+        unless is_integer(value) and value > 0 do
+          compile_error!(
+            env,
+            "explore option #{key} must be a positive integer, got #{Macro.to_string(value)}"
+          )
+        end
+
+        {key, value}
+
+      {key, _value} when is_atom(key) ->
+        compile_error!(
+          env,
+          "unknown explore option #{inspect(key)}; expected max_steps or batch"
+        )
+
+      _other ->
+        explore_error!(opts, env)
+    end)
+  end
+
+  defp explore!(other, env), do: explore_error!(other, env)
+
+  @spec explore_error!(term(), Macro.Env.t()) :: no_return()
+  defp explore_error!(other, env) do
+    compile_error!(env, "explore must be #{@explore_shape}, got #{Macro.to_string(other)}")
   end
 
   @sensitivity_shape "true, false or [allow_untested: [keys: [...], actions: [...]]]"
@@ -385,6 +446,8 @@ defmodule AshQuint.Case do
         end
       end
 
+    explore_test = if setup.explore, do: explore_test(setup)
+
     skip =
       case {config.on_missing_model, missing} do
         {:skip, [{path, _hash} | _]} -> "model file #{path} for #{inspect(model)} is missing"
@@ -404,6 +467,8 @@ defmodule AshQuint.Case do
 
       unquote(sensitivity_test)
 
+      unquote(explore_test)
+
       if unquote(skip), do: @tag(skip: unquote(skip))
       @tag quint_model: unquote(model)
       ExUnit.Case.test unquote("traces for #{model} are current") do
@@ -413,6 +478,28 @@ defmodule AshQuint.Case do
           unquote(models),
           unquote(config.on_missing_model)
         )
+      end
+    end
+  end
+
+  defp explore_test(setup) do
+    model = setup.model
+
+    # adapter_opts and the replay values are the caller's AST, spliced in.
+    opts =
+      [
+        model: model,
+        adapter: setup.adapter,
+        config: setup.config_path,
+        adapter_opts: setup.adapter_opts,
+        replay: setup.replay,
+        traces: setup.selection
+      ] ++ setup.explore
+
+    quote do
+      @tag quint_explore: unquote(model), quint_model: unquote(model), timeout: :infinity
+      ExUnit.Case.test unquote("explore #{model}") do
+        AshQuint.Explore.run!(unquote(opts))
       end
     end
   end

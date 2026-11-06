@@ -57,6 +57,7 @@ defmodule AshQuint.Test.ToyAdapter do
   #   :off_by_one         inc adds by + 1
   #   :wrong_code         rejects with "other"
   #   :crash              inc returns {:error, %RuntimeError{message: "db down"}}
+  #   :raise              inc raises RuntimeError "db down"
   #   :negative           reset sets -1
   #   :bad_return         inc returns :ok instead of a step/2 shape
   #   :extra_key          the projection also has "ghost" => 1
@@ -94,6 +95,9 @@ defmodule AshQuint.Test.ToyAdapter do
 
       :crash in ctx.faults ->
         {:ok, {:error, %RuntimeError{message: "db down"}}, ctx}
+
+      :raise in ctx.faults ->
+        raise "db down"
 
       ctx.count + by > @limit ->
         code = if :wrong_code in ctx.faults, do: "other", else: "too_big"

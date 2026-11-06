@@ -78,14 +78,9 @@ defmodule AshQuint.Gen do
     seed = "--seed=#{model.seed}"
 
     random =
-      if opts = model.random do
+      if model.random do
         out = Path.join(tmp_dir, "random_{seq}.itf.json")
-
-        args =
-          ["run", model.model, "--main=#{opts[:main]}", seed] ++
-            flags(opts, [:init, :step, :max_steps, :max_samples, :n_traces]) ++
-            ["--out-itf=#{out}"]
-
+        args = random_args(model, model.seed, out: out)
         [%{kind: :random, name: nil, cmd: cmd, args: args, out: out}]
       else
         []
@@ -145,6 +140,23 @@ defmodule AshQuint.Gen do
       args: ["compile", "--target=json", "--main=#{main}", file, "--out=#{path}"],
       out: path
     }
+  end
+
+  @doc """
+  The `quint run` arguments for `model`'s `random:` source with `seed`:
+  what `commands/3` runs (with the model's seed), and what
+  `AshQuint.Explore` runs per batch. `overrides` replace the configured
+  `:n_traces`, `:max_samples` and `:max_steps`; `:out`, the `--out-itf`
+  path or pattern, is required.
+  """
+  @spec random_args(Model.t(), integer(), keyword()) :: [String.t()]
+  def random_args(%Model{random: random} = model, seed, overrides) when is_list(random) do
+    {out, overrides} = Keyword.pop!(overrides, :out)
+    opts = Keyword.merge(random, Keyword.take(overrides, [:n_traces, :max_samples, :max_steps]))
+
+    ["run", model.model, "--main=#{opts[:main]}", "--seed=#{seed}"] ++
+      flags(opts, [:init, :step, :max_steps, :max_samples, :n_traces]) ++
+      ["--out-itf=#{out}"]
   end
 
   defp flags(opts, keys) do

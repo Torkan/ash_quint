@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Exploring: `use AshQuint.Case, explore: true` (or
+  `[max_steps: …, batch: …]`) defines an `"explore <model>"` test, tagged
+  `quint_explore: <model>`, that replays fresh `quint run` traces of the
+  model's `random:` source in batches of consecutive seeds
+  (`AshQuint.Explore`). A failing trace is cut after its failing step,
+  confirmed by a second replay and written with its provenance to
+  `_build/<env>/ash_quint/explore/<model>/` as a candidate for
+  `mix ash_quint.promote`. `mix ash_quint.explore [model ...] [--runs]
+  [--seed] [--budget] [--failures]` runs these tests with the settings in
+  `ASH_QUINT_EXPLORE*` variables. Exclude `:quint_explore` in
+  `test/test_helper.exs`: run without `ASH_QUINT_EXPLORE=1`, the test
+  fails. `AshQuint.Gen.random_args/3` builds the `quint run` arguments
+  that gen and explore share.
 - Regression traces: `mix ash_quint.promote <candidate> ...` commits a
   trace with its provenance in `#meta.ash_quint` (model, model hash, seed,
   index) as `<out>/regression_<seed>_<index>.itf.json`, byte for byte, and

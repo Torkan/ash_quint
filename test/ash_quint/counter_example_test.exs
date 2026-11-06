@@ -1,38 +1,17 @@
 defmodule AshQuint.CounterExampleTest do
   # The counter example end to end: every committed trace of
-  # priv/examples/counter replays against the Ash resource.
+  # priv/examples/counter replays against the Ash resource, and
+  # `mix ash_quint.explore counter` replays fresh ones (explore: true).
   use ExUnit.Case, async: true
 
   use AshQuint.Case,
     model: :counter,
     adapter: AshQuint.Test.CounterAdapter,
-    sensitivity: true
+    sensitivity: true,
+    explore: true
 
-  alias AshQuint.{Manifest, Replay, Step, Trace}
-  alias AshQuint.Test.CounterAdapter
-
-  defmodule OffByOneAdapter do
-    @moduledoc false
-    # The counter adapter whose Inc adds one more than asked.
-    use AshQuint.Adapter
-
-    alias AshQuint.Test.CounterAdapter
-
-    @impl true
-    defdelegate init(trace, opts), to: CounterAdapter
-
-    @impl true
-    def step(ctx, %Step{action_taken: "Inc", nondet_picks: %{"by" => by} = picks} = step),
-      do: CounterAdapter.step(ctx, %{step | nondet_picks: %{picks | "by" => by + 1}})
-
-    def step(ctx, step), do: CounterAdapter.step(ctx, step)
-
-    @impl true
-    defdelegate project(ctx), to: CounterAdapter
-
-    @impl true
-    defdelegate outcome(result), to: CounterAdapter
-  end
+  alias AshQuint.{Manifest, Replay, Trace}
+  alias AshQuint.Test.{CounterAdapter, CounterAdapterOffByOne}
 
   @out "priv/examples/counter/traces"
 
@@ -46,7 +25,7 @@ defmodule AshQuint.CounterExampleTest do
         seed: seed
       )
 
-    assert {:error, failure} = Replay.run(OffByOneAdapter, trace, model: :counter)
+    assert {:error, failure} = Replay.run(CounterAdapterOffByOne, trace, model: :counter)
 
     assert failure.message ==
              """

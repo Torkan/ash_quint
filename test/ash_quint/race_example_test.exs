@@ -9,7 +9,8 @@ defmodule AshQuint.RaceExampleTest do
   use AshQuint.Case,
     model: :race,
     adapter: AshQuint.Test.RaceAdapter,
-    sensitivity: [allow_untested: [vars: ~w(inflight finished)]]
+    sensitivity: [allow_untested: [vars: ~w(inflight finished)]],
+    explore: true
 
   alias AshQuint.{Config, Manifest, Replay, Step, Trace}
   alias AshQuint.Test.RaceAdapter

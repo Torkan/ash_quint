@@ -70,6 +70,10 @@ mix test.check_migrations
   table of the committed manifests, `mix ash_quint.coverage` (also printed
   by `mix ash_quint.gen` after writing).
 - `AshQuint.Case` — compile-time test generation.
+- `AshQuint.Explore`, `Mix.Tasks.AshQuint.Explore` — explore sessions
+  (fresh `quint run` traces replayed, failures written as candidates under
+  `_build/<env>/ash_quint/explore/`), the `explore:` test and
+  `mix ash_quint.explore`.
 - `AshQuint.Ash`, `AshQuint.Ash.Gate` — Ash helpers (outcomes, snapshots,
   tracer context transfer, `pg_backend_pid/1`, `pg_blocked?/2`) and the
   gate change, compiled only when Ash is loaded; no other module in `lib/`
@@ -83,7 +87,8 @@ mix test.check_migrations
   (against `test/support/ash/race_counter.ex`, a non-private ETS resource).
   Regenerate with `MIX_ENV=test mix ash_quint.gen race`.
 - `test/support/counter_adapter.ex` — the reference adapter, linked from the
-  README; `test/support/toy_adapter.ex` — an in-memory adapter with
+  README, and `CounterAdapterOffByOne`, a broken one for the failure and
+  explore tests; `test/support/toy_adapter.ex` — an in-memory adapter with
   switchable faults for the Replay and Sensitivity tests;
   `test/support/concurrent_toy_adapter.ex` — its concurrent counterpart
   (an Agent-backed counter, gates and a lock) for the concurrent replay
@@ -102,6 +107,9 @@ mix test.check_migrations
   Node or Quint. Run the tests that call real Quint (needs Node) with
   `mix test --only quint_cli`. Don't tag them `:quint`: `AshQuint.Case` tags
   its replay tests `quint: <source>`, and those run in the default suite.
+- `:quint_explore` tags the explore tests (`explore: true` in the examples'
+  test modules); `test_helper.exs` excludes it and it must never run in the
+  default suite. Run them with `MIX_ENV=test mix ash_quint.explore`.
 - Quint is pinned to 0.33.1 and run through npx, from the repo root:
   `npx --yes @informalsystems/quint@0.33.1 <run|test> …`. In zsh, put the
   command in an array (`Q=(npx --yes @informalsystems/quint@0.33.1)`), since a

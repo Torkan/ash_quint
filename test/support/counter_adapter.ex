@@ -88,3 +88,28 @@ defmodule AshQuint.Test.CounterAdapter do
     end
   end
 end
+
+defmodule AshQuint.Test.CounterAdapterOffByOne do
+  @moduledoc false
+  # The counter adapter whose Inc adds one more than asked: a broken system
+  # for the failure-message and explore tests.
+  use AshQuint.Adapter
+
+  alias AshQuint.Step
+  alias AshQuint.Test.CounterAdapter
+
+  @impl true
+  defdelegate init(trace, opts), to: CounterAdapter
+
+  @impl true
+  def step(ctx, %Step{action_taken: "Inc", nondet_picks: %{"by" => by} = picks} = step),
+    do: CounterAdapter.step(ctx, %{step | nondet_picks: %{picks | "by" => by + 1}})
+
+  def step(ctx, step), do: CounterAdapter.step(ctx, step)
+
+  @impl true
+  defdelegate project(ctx), to: CounterAdapter
+
+  @impl true
+  defdelegate outcome(result), to: CounterAdapter
+end

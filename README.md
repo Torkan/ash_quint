@@ -39,13 +39,19 @@ end
 Ash is optional: `AshQuint.Ash` and the Ash-aware default `outcome/1` are
 there only when your project depends on `ash`.
 
-Since ash_quint is a test-only dependency, its Mix task exists only under
-`MIX_ENV=test`. Either run it as `MIX_ENV=test mix ash_quint.gen`, or make
-`test` its preferred environment in `mix.exs`:
+Since ash_quint is a test-only dependency, its Mix tasks exist only under
+`MIX_ENV=test`. Either run them as `MIX_ENV=test mix ash_quint.gen`, or
+make `test` their preferred environment in `mix.exs`:
 
 ```elixir
 def cli do
-  [preferred_envs: ["ash_quint.gen": :test]]
+  [
+    preferred_envs: [
+      "ash_quint.gen": :test,
+      "ash_quint.explore": :test,
+      "ash_quint.promote": :test
+    ]
+  ]
 end
 ```
 
@@ -293,7 +299,8 @@ Commit the traces and the manifest.
 
 ### Regression traces
 
-A trace that once found a bug can be kept as a regression trace:
+A trace that once found a bug (a candidate from exploring, see
+"Exploring") can be kept as a regression trace:
 `<out>/regression_<seed>_<index>.itf.json`, a trace with its provenance in
 one more top-level `#meta` key (the replay ignores the top-level `#meta`):
 
@@ -661,7 +668,10 @@ model's manifest and defines:
   the manifest's;
 - `"traces for counter are current"`, which fails when a model file's hash
   no longer matches the manifest: run `mix ash_quint.gen counter`;
-- with `sensitivity:`, `"sensitivity of counter"` (see below).
+- with `sensitivity:`, `"sensitivity of counter"` (see below);
+- with `explore: true` (or `explore: [max_steps: 20, batch: 25]`),
+  `"explore counter"`, which replays fresh traces and is excluded from
+  the suite (see "Exploring").
 
 The config, manifest, traces and model files are external resources, so
 the module recompiles when they change. An unknown model, a missing
@@ -855,6 +865,104 @@ list can't go stale. Actions that only ever return
 `Peek`). The `sensitivity:` value must be a literal: the lists can be
 written as `~w(plans)`, but not as module attributes or variables.
 
+## Exploring: `mix ash_quint.explore`
+
+The committed traces are a fixed sample. Exploring replays fresh ones:
+each run asks Quint for new random traces of the model, replays them
+against the system like the committed ones, and reports every failure as
+a candidate regression trace you can commit.
+
+Add `explore:` to the model's test module:
+
+```elixir
+use AshQuint.Case,
+  model: :counter,
+  adapter: MyApp.CounterTrace,
+  explore: true            # or [max_steps: 20, batch: 25]
+```
+
+It defines `"explore counter"`, tagged `quint_explore: :counter`,
+`quint_model: :counter` and `timeout: :infinity`. `max_steps` is the
+length of the fresh traces (default: the model's `random:` `max_steps`,
+else Quint's), `batch` the traces per `quint run` (default 20; each run
+costs about a second, mostly Node start-up). The model needs `random:`:
+its `main`, `init` and `step` are used. Any other key is a compile error.
+
+The test runs Quint, so keep it out of the suite in
+`test/test_helper.exs`:
+
+```elixir
+ExUnit.start(exclude: [:quint_explore])
+```
+
+Run any other way than below, it fails at once:
+`explore test for :counter ran without mix ash_quint.explore; add :quint_explore to ExUnit.start(exclude: …) in test/test_helper.exs`.
+
+Run it with:
+
+```sh
+MIX_ENV=test mix ash_quint.explore [model ...] [--runs N] [--seed S] [--budget SECONDS] [--failures N]
+```
+
+The task checks the models against `ash_quint.exs` and runs
+`mix test --only quint_explore:<model>` (every explore test without
+models) with the settings in environment variables:
+
+| Flag | Variable | Default | Meaning |
+|---|---|---|---|
+| | `ASH_QUINT_EXPLORE` | — | must be `1`; the task sets it |
+| `--runs` | `ASH_QUINT_EXPLORE_RUNS` | 100 | fresh traces to generate |
+| `--seed` | `ASH_QUINT_EXPLORE_SEED` | random | base seed |
+| `--budget` | `ASH_QUINT_EXPLORE_BUDGET` | none | wall-clock seconds; no new batch starts after it |
+| `--failures` | `ASH_QUINT_EXPLORE_FAILURES` | 1 | stop after this many failures |
+
+`ASH_QUINT_EXPLORE=1 mix test --only quint_explore` is the same run
+without the task. A malformed value fails the test naming the variable;
+when no explore test runs, the task fails asking for `explore: true`.
+
+Each batch k is one `quint run` with seed `base + k`, the model's
+`random:` options and `--n-traces` equal to `--max-samples`. Each trace is
+replayed in the test process, with the module's adapter, `adapter_opts`,
+`replay:` and `traces:` selection: a fresh trace the selection leaves out
+(by the same rule as the manifest's `concurrent`) is counted as skipped.
+All replays share the test's sandbox, as the sensitivity check's do. A
+passing session prints one line:
+
+```
+explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped
+```
+
+A trace is named `"<seed>_<index>"`, so its failure message is the one
+its regression test will print. A replay failing at step N is cut to its
+states 0..N and replayed once more: when it fails at N again, the cut
+trace is the candidate; otherwise (a race window without a gate, say) the
+full trace is. An exception from the adapter is a failure too, with the
+full trace. The candidate gets its provenance in `#meta.ash_quint` and is
+written to `_build/<env>/ash_quint/explore/<model>/`, and the test fails
+listing each one with the command that commits it:
+
+```text
+explore counter: 1 failure in 100 traces (seeds 4031..4035)
+
+counter regression 4031_2, step 5 (Inc), seed 4031: key "counts":
+  expected: %{"c1" => 3}
+  actual:   %{"c1" => 4}
+candidate: _build/test/ash_quint/explore/counter/regression_4031_2.itf.json (cut to 5 steps)
+promote:   MIX_ENV=test mix ash_quint.promote _build/test/ash_quint/explore/counter/regression_4031_2.itf.json
+```
+
+The note after the path is `cut to N steps`, `not cut` (the failure was
+at the last step), `did not reproduce on a second replay; full trace` or
+`adapter raised; full trace`. Fix the bug, promote the candidate (see
+"Regression traces"), and the committed suite keeps it as
+`"regression 4031_2"`. A Quint failure ends the session and fails the
+test with Quint's output, after the failures found so far.
+
+Two modules of one model (`traces: :sequential` and `traces: :concurrent`)
+each run their own session. Concurrent traces need the same care as the
+committed ones: a race the gates don't cover may pass by luck, which the
+second replay shows.
+
 ## Databases
 
 A concurrent replay reproduces a race only where an op task stops at a
@@ -980,6 +1088,10 @@ and its module,
 ## CI
 
 - The default test suite needs neither Node nor Quint: run `mix test`.
+- Exploring isn't meant for CI by default: it tries new traces each run,
+  so a failure depends on the seed. Run it locally, or in a scheduled
+  job with Node (`MIX_ENV=test mix ash_quint.explore --budget 600`), and
+  promote what it finds.
 - In a job with Node, run `MIX_ENV=test mix ash_quint.gen --check`. It
   regenerates every model's traces and fails if they differ from the
   committed ones, so a model change without regenerated traces, or a
