@@ -84,6 +84,18 @@ defmodule AshQuint.Case do
   An unknown model, a missing manifest or one without traces is a compile
   error.
 
+  With a format 3 manifest, it checks the adapter's `step/2` clauses
+  against the model interface (`AshQuint.Interface`), read from the
+  compiled adapter's debug info, and warns (`IO.warn/2`, at the `use`
+  line) about a clause for an action the model doesn't have, a clause
+  matching a pick its action doesn't have (map picks aren't checked), and
+  an action without a clause (never the init action, and not when a
+  clause has no literal `action_taken`, as a delegating
+  `def step(ctx, step)` does). A clause's literal action and picks are
+  read from a `%AshQuint.Step{}` or plain map pattern. An adapter without
+  debug info, or that doesn't define `step/2`, isn't checked.
+  `mix test --warnings-as-errors` turns the warnings into failures.
+
   ## Options
 
     * `:model` (required) — the model's key in `ash_quint.exs`.
@@ -118,7 +130,8 @@ defmodule AshQuint.Case do
       (the replay's defaults).
   """
 
-  alias AshQuint.{Config, Gen, Manifest, Sensitivity, Trace}
+  alias AshQuint.Case.AdapterCheck
+  alias AshQuint.{Config, Gen, Interface, Manifest, Sensitivity, Trace}
   alias AshQuint.Config.Model
 
   @doc false
@@ -152,6 +165,7 @@ defmodule AshQuint.Case do
     end
 
     manifest = read_manifest!(model_config, config.root, env)
+    check_adapter(adapter, model_config, manifest, env)
     manifest = select!(manifest, selection, model_config, env)
 
     define(%{
@@ -381,6 +395,23 @@ defmodule AshQuint.Case do
       :error -> compile_error!(env, "use AshQuint.Case needs the #{inspect(key)} option")
     end
   end
+
+  # Warns about the adapter's step/2 clauses that the model interface
+  # doesn't match (format 3 manifests, compiled adapters with debug info).
+  defp check_adapter(adapter, model_config, %Manifest{interface: %Interface{} = interface}, env) do
+    adapter = Macro.expand(adapter, env)
+
+    with true <- is_atom(adapter),
+         {:module, adapter} <- Code.ensure_compiled(adapter) do
+      adapter
+      |> AdapterCheck.warnings(model_config.name, interface, model_config.init_action)
+      |> Enum.each(&IO.warn(&1, Macro.Env.stacktrace(env)))
+    end
+
+    :ok
+  end
+
+  defp check_adapter(_adapter, _model_config, _manifest, _env), do: :ok
 
   defp read_manifest!(model_config, root, env) do
     name = model_config.name

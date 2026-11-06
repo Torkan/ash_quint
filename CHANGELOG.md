@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Adapter check: with a format 3 manifest, `use AshQuint.Case` reads the
+  adapter's `step/2` clauses from its debug info and warns at compile time
+  (`IO.warn/2` at the `use` line) about a clause for an action the model
+  doesn't have, a clause matching a pick its action doesn't have, and an
+  action without a clause (not the init action, and not when a clause
+  matches any action). Adapters without debug info, format 1 and 2
+  manifests: no check. `mix test --warnings-as-errors` makes the warnings
+  failures.
 - Witness hit rates: when a model's `witnesses:` have the same `main` as
   `random:`, explore adds `--witnesses <names…>` to each batch and sums
   Quint's per-witness counts; the report gains `witnesses`

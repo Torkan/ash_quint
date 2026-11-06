@@ -13,20 +13,24 @@ defmodule AshQuint.CaseTest do
   @config "test/fixtures/case/ash_quint.exs"
 
   # Compiles a test module that uses AshQuint.Case for `model` and returns
-  # the module.
+  # the module. The toy adapter serves several toy models, so against the
+  # :promoted interface the adapter check warns about its other actions
+  # (see "adapter check"); those warnings are captured here.
   defp compile(model, preamble \\ "use ExUnit.Case, register: false", extra \\ "") do
     mod = Module.concat(__MODULE__, "Gen#{System.unique_integer([:positive])}")
 
-    Code.compile_string("""
-    defmodule #{inspect(mod)} do
-      #{preamble}
+    ExUnit.CaptureIO.capture_io(:stderr, fn ->
+      Code.compile_string("""
+      defmodule #{inspect(mod)} do
+        #{preamble}
 
-      use AshQuint.Case,
-        config: #{inspect(@config)},
-        model: #{inspect(model)},
-        adapter: AshQuint.Test.ToyAdapter#{extra}
-    end
-    """)
+        use AshQuint.Case,
+          config: #{inspect(@config)},
+          model: #{inspect(model)},
+          adapter: AshQuint.Test.ToyAdapter#{extra}
+      end
+      """)
+    end)
 
     mod
   end
@@ -656,6 +660,76 @@ defmodule AshQuint.CaseTest do
 
       assert compile_with_error(:ok, ", replay: [gate_timeout: -1]") ==
                "replay option gate_timeout must be a non-negative integer, got -1"
+    end
+  end
+
+  describe "adapter check" do
+    # Compiles a test module for `model` with `adapter` from a file named
+    # `file`; returns the module and what went to stderr.
+    defp compile_checked(model, adapter, file) do
+      mod = Module.concat(__MODULE__, "Gen#{System.unique_integer([:positive])}")
+
+      source = """
+      defmodule #{inspect(mod)} do
+        use ExUnit.Case, register: false
+
+        use AshQuint.Case,
+          config: #{inspect(@config)},
+          model: #{inspect(model)},
+          adapter: #{inspect(adapter)}
+      end
+      """
+
+      {_result, stderr} =
+        ExUnit.CaptureIO.with_io(:stderr, fn -> Code.compile_string(source, file) end)
+
+      {mod, stderr}
+    end
+
+    test "a case module warns about an unknown action" do
+      {_mod, stderr} =
+        compile_checked(:promoted, AshQuint.Test.AdapterCheck.Typo, "test/check_typo_test.exs")
+
+      assert stderr =~
+               ~s(AshQuint.Test.AdapterCheck.Typo has a step/2 clause for "Incr", ) <>
+                 "which isn't an action of :promoted (actions: Inc, Reset)"
+
+      assert stderr =~
+               ~s(AshQuint.Test.AdapterCheck.Typo step/2 clause for "Inc" matches pick "ctr", ) <>
+                 "which Inc doesn't have (picks: by)"
+
+      assert stderr =~ "test/check_typo_test.exs:4"
+    end
+
+    test "no check with a format 2 manifest" do
+      {mod, stderr} =
+        compile_checked(:concurrent, AshQuint.Test.AdapterCheck.Typo, "test/check_v2_test.exs")
+
+      refute stderr =~ "step/2 clause"
+      assert Map.has_key?(tests(mod), :"test traces for concurrent are current")
+    end
+
+    test "no check for an adapter without debug info" do
+      adapter = Module.concat(__MODULE__, "InMemory#{System.unique_integer([:positive])}")
+
+      Code.compile_string("""
+      defmodule #{inspect(adapter)} do
+        def step(ctx, %AshQuint.Step{action_taken: "Incr"}), do: ctx
+      end
+      """)
+
+      {_mod, stderr} = compile_checked(:promoted, adapter, "test/check_memory_test.exs")
+      refute stderr =~ "step/2 clause"
+    end
+
+    test "the toy adapter warns about the actions the promoted model doesn't have" do
+      {_mod, stderr} = compile_checked(:promoted, ToyAdapter, "test/check_toy_test.exs")
+
+      for action <- ~w(Peek Begin Commit) do
+        assert stderr =~
+                 ~s(AshQuint.Test.ToyAdapter has a step/2 clause for "#{action}", ) <>
+                   "which isn't an action of :promoted (actions: Inc, Reset)"
+      end
     end
   end
 end

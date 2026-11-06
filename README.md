@@ -726,6 +726,26 @@ The config, manifest, traces and model files are external resources, so
 the module recompiles when they change. An unknown model, a missing
 manifest or one without traces is a compile error.
 
+With a format 3 manifest, it also checks the adapter's `step/2` clauses
+against the model interface, reading them from the compiled adapter's
+debug info, and warns at the `use` line about a clause for an action the
+model doesn't have, a clause matching a pick its action doesn't have, and
+an action with no clause (never `init_action`, and not when a clause
+matches any action, as a delegating adapter's `def step(ctx, step)`
+does):
+
+```
+warning: MyApp.CounterTrace has a step/2 clause for "Incr", which isn't an action of :counter (actions: Inc, Reset, Peek)
+warning: MyApp.CounterTrace step/2 clause for "Inc" matches pick "amount", which Inc doesn't have (picks: ctr, by)
+warning: MyApp.CounterTrace has no step/2 clause for "Reset" of :counter
+```
+
+A clause counts when its second argument is a `%AshQuint.Step{}` or
+plain map pattern with a literal `action_taken` and, for the picks, a
+literal `nondet_picks` map. Map picks aren't checked. An adapter without
+debug info (defined in the test file itself, say) isn't checked.
+`mix test --warnings-as-errors` turns the warnings into failures.
+
 Select the tests by tag: `mix test --only quint_model:counter`,
 `mix test --only quint:witness`, `mix test --only quint:regression`.
 
