@@ -20,13 +20,15 @@ defmodule Mix.Tasks.AshQuint.Promote do
   checked before anything is written, so one bad candidate writes nothing.
   It is an error when a candidate:
 
-    * has no provenance;
+    * can't be read, or has no provenance;
     * names a model that isn't configured;
     * has no valid manifest for its model, or one older than format 3
       (written before the model interface was recorded; regenerate it);
-    * was found against another version of the model file than both the
-      manifest's and the current one (regenerate and explore again);
-    * would overwrite a regression trace already there.
+    * was found against a version of the model file, unless it equals
+      both the manifest's and the current one (regenerate and explore
+      again);
+    * would overwrite a regression trace already there, or one the
+      manifest still lists after its file was deleted (regenerate first).
 
   Like `mix ash_quint.gen`, run it as `MIX_ENV=test mix ash_quint.promote`
   when `ash_quint` is a test-only dependency.
@@ -67,9 +69,9 @@ defmodule Mix.Tasks.AshQuint.Promote do
 
   # Everything is checked, and the entry built, before anything is written.
   defp check!(config, file, earlier) do
-    binary = File.read!(file)
+    binary = read!(file)
     provenance = provenance!(file, binary)
-    [model] = Config.select!(config, [provenance["model"]])
+    model = model!(config, file, provenance["model"])
     manifest = manifest!(config, file, model)
     check_hash!(config, file, model, manifest, provenance)
 
@@ -81,6 +83,13 @@ defmodule Mix.Tasks.AshQuint.Promote do
       Mix.raise("#{file}: #{target} already exists")
     end
 
+    if Enum.any?(manifest.traces, &(&1.file == name)) do
+      Mix.raise(
+        "#{file}: #{name} is already in #{Path.join(model.out, "manifest.json")}; " <>
+          "run MIX_ENV=test mix ash_quint.gen #{model.name} to drop entries whose files are gone"
+      )
+    end
+
     %{
       model: model,
       root: config.root,
@@ -89,6 +98,20 @@ defmodule Mix.Tasks.AshQuint.Promote do
       binary: binary,
       entry: entry!(file, name, binary, model)
     }
+  end
+
+  defp read!(file) do
+    case File.read(file) do
+      {:ok, binary} -> binary
+      {:error, reason} -> Mix.raise("#{file}: could not read it (#{:file.format_error(reason)})")
+    end
+  end
+
+  defp model!(config, file, name) do
+    [model] = Config.select!(config, [name])
+    model
+  rescue
+    error in Mix.Error -> Mix.raise("#{file}: " <> Exception.message(error))
   end
 
   defp provenance!(file, binary) do

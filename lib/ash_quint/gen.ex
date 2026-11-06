@@ -36,8 +36,10 @@ defmodule AshQuint.Gen do
   (`provenance/1`) records another model hash than the model file's
   current one is still kept, with a note in `notes`: gen can't tell
   whether the trace is still a behaviour of the new model. A regression
-  file without provenance is an error. Deleting a regression file drops
-  its entry at the next generation.
+  file without provenance is an error, and so is one that isn't JSON or
+  one whose states the model's `action_path` and `result_path` no longer
+  read (delete it if it no longer applies). Deleting a regression file
+  drops its entry at the next generation.
 
   Nothing is written by `generate/3`; `write!/2` writes one model's result.
   """
@@ -390,7 +392,7 @@ defmodule AshQuint.Gen do
     regressions = regressions(config, model)
 
     regression_entries =
-      Enum.map(regressions, fn {file, binary} -> regression_entry!(file, binary, model) end)
+      Enum.map(regressions, fn {file, binary} -> regression!(file, binary, model) end)
 
     notes =
       for {file, binary} <- regressions,
@@ -417,12 +419,47 @@ defmodule AshQuint.Gen do
       {:error, "model #{inspect(model.name)}: " <> Exception.message(error)}
   end
 
+  # Listed, not globbed: a root with glob characters would match nothing,
+  # and write!/2 would then delete every regression file.
   defp regressions(config, model) do
-    [config.root, model.out, "regression_*.itf.json"]
-    |> Path.join()
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.map(&{Path.basename(&1), File.read!(&1)})
+    dir = Path.join(config.root, model.out)
+
+    case File.ls(dir) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(
+          &(String.starts_with?(&1, "regression_") and String.ends_with?(&1, ".itf.json"))
+        )
+        |> Enum.sort()
+        |> Enum.map(&{&1, File.read!(Path.join(dir, &1))})
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  # regression_entry!/3 for a committed file: one that isn't JSON, or that
+  # the model's action and result paths no longer read, names its cause.
+  defp regression!(file, binary, model) do
+    case Jason.decode(binary) do
+      {:ok, _json} ->
+        seed = regression_seed!(file, binary)
+
+        try do
+          regression_entry(file, binary, model, seed)
+        rescue
+          error in [ArgumentError, ITF.Error] ->
+            reraise ArgumentError,
+                    "#{file} no longer fits the model (#{Exception.message(error)}); " <>
+                      "delete it if it no longer applies",
+                    __STACKTRACE__
+        end
+
+      {:error, error} ->
+        raise ArgumentError,
+              "#{file} is not valid JSON (#{Exception.message(error)}); " <>
+                "delete it if it no longer applies"
+    end
   end
 
   defp source_and_name("random_" <> rest), do: {:random, trim_ext(rest)}
@@ -448,20 +485,25 @@ defmodule AshQuint.Gen do
   """
   @spec regression_entry!(String.t(), binary(), Model.t()) :: Manifest.entry()
   def regression_entry!(file, binary, %Model{} = model) do
-    seed =
-      case provenance(binary) do
-        {:ok, %{"seed" => seed}} when is_integer(seed) ->
-          seed
+    regression_entry(file, binary, model, regression_seed!(file, binary))
+  end
 
-        {:ok, _provenance} ->
-          raise ArgumentError, "#{file}: #meta.ash_quint.seed must be an integer"
+  defp regression_seed!(file, binary) do
+    case provenance(binary) do
+      {:ok, %{"seed" => seed}} when is_integer(seed) ->
+        seed
 
-        :error ->
-          raise ArgumentError,
-                "#{file} has no #meta.ash_quint; " <>
-                  "only mix ash_quint.promote writes regression traces"
-      end
+      {:ok, _provenance} ->
+        raise ArgumentError, "#{file}: #meta.ash_quint.seed must be an integer"
 
+      :error ->
+        raise ArgumentError,
+              "#{file} has no #meta.ash_quint; " <>
+                "only mix ash_quint.promote writes regression traces"
+    end
+  end
+
+  defp regression_entry(file, binary, model, seed) do
     "regression_" <> name = trim_ext(file)
     trace = ITF.decode!(Jason.decode!(binary), file)
 

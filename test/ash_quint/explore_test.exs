@@ -196,8 +196,18 @@ defmodule AshQuint.ExploreTest do
                   "cut_at" => 1,
                   "quint" => "0.33.1",
                   "model_hash" => Manifest.hash_file("test/fixtures/case/ok/model.qnt"),
-                  "args" => args -- ["--yes", "@informalsystems/quint@0.33.1"]
+                  # Without --out-itf: its temp path means nothing once committed.
+                  "args" =>
+                    Enum.reject(
+                      args -- ["--yes", "@informalsystems/quint@0.33.1"],
+                      &String.starts_with?(&1, "--out-itf=")
+                    )
                 }}
+
+      refute Enum.any?(
+               elem(Gen.provenance(binary), 1)["args"],
+               &String.starts_with?(&1, "--out")
+             )
 
       # The failure cap (1) stopped the session after the first batch.
       assert %{generated: 2, replayed: 1, seeds: 10..10, error: nil} = report
@@ -307,6 +317,71 @@ defmodule AshQuint.ExploreTest do
                  "executable not found"
 
       assert %{generated: 0, replayed: 0, failures: []} = report
+    end
+
+    test "a fresh trace that doesn't decode ends the session", %{tmp_dir: tmp_dir} do
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+      ok = runner()
+
+      # The first batch is the fixtures; the second's trace 1 isn't ITF.
+      runner = fn exe, args, opts ->
+        result = ok.(exe, args, opts)
+
+        if Agent.get_and_update(calls, &{&1, &1 + 1}) == 1 do
+          "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
+          File.write!(String.replace(out, "{seq}", "1"), ~s({"states": 1}))
+        end
+
+        result
+      end
+
+      report =
+        run(settings(failures: 10), [adapter_opts: [faults: [:raise]]], tmp_dir, runner: runner)
+
+      assert report.error ==
+               "fresh trace 11_1 of :ok could not be read: " <>
+                 "explore 11_1 at $: not an ITF trace (needs vars and states lists)"
+
+      assert %{generated: 4, replayed: 3, seeds: 10..11} = report
+      assert [%{index: 0}, %{index: 1}, %{index: 0}] = report.failures
+      assert File.ls!(Path.join(tmp_dir, "tmp")) == []
+    end
+
+    test "a fresh trace that isn't JSON ends the session", %{tmp_dir: tmp_dir} do
+      ok = runner()
+
+      runner = fn exe, args, opts ->
+        result = ok.(exe, args, opts)
+        "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
+        File.write!(String.replace(out, "{seq}", "0"), "{")
+        result
+      end
+
+      report = run(settings(), [], tmp_dir, runner: runner)
+
+      assert report.error =~ ~r/\Afresh trace 10_0 of :ok could not be read: .+/
+      assert %{generated: 2, replayed: 0, failures: []} = report
+      assert File.ls!(Path.join(tmp_dir, "tmp")) == []
+    end
+
+    test "a fresh trace the selection can't read ends the session", %{tmp_dir: tmp_dir} do
+      ok = runner()
+
+      runner = fn exe, args, opts ->
+        result = ok.(exe, args, opts)
+        "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
+        trace = %{"vars" => ["n"], "states" => [%{"n" => 0}, %{"n" => 1}]}
+        File.write!(String.replace(out, "{seq}", "0"), Jason.encode!(trace))
+        result
+      end
+
+      report = run(settings(), [traces: :sequential], tmp_dir, runner: runner)
+
+      assert report.error ==
+               "fresh trace 10_0 of :ok could not be read: " <>
+                 "regression_10_0.itf.json, state 1: no action at lastAction"
+
+      assert %{generated: 2, replayed: 0, skipped: 0, failures: []} = report
     end
 
     test "removes each batch's temp dir", %{tmp_dir: tmp_dir} do

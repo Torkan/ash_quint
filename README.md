@@ -318,7 +318,8 @@ one more top-level `#meta` key (the replay ignores the top-level `#meta`):
 ```
 
 `model_hash` is the model file's hash when the trace was found, `seed` and
-`index` the Quint run and the trace's place in its batch. The file is the
+`index` the Quint run and the trace's place in its batch, `args` that
+run's Quint arguments (without `--out-itf`). The file is the
 regression: Quint is never rerun for it.
 
 Commit one with `mix ash_quint.promote`:
@@ -338,13 +339,17 @@ ash_quint.promote: counter: added regression_4031_2.itf.json (5 steps)
 
 It checks every file before writing any: a file without `#meta.ash_quint`,
 an unknown model, a missing manifest or one older than format 3 (run
-`mix ash_quint.gen` first), a `model_hash` other than both the manifest's
-and the model file's current hash (regenerate, and find the trace again),
-or a target that already exists is an error, and nothing is written.
+`mix ash_quint.gen` first), a `model_hash`, unless it equals both the
+manifest's and the model file's current hash (regenerate, and find the
+trace again), a target that already exists, or one the manifest still
+lists after its file was deleted (rerun `mix ash_quint.gen` first) is an
+error, and nothing is written.
 
 `mix ash_quint.gen` keeps every `regression_*.itf.json` in `out` as it is
 and rebuilds its manifest entry, so neither a regeneration nor `--check`
-reports it. A regression file without `#meta.ash_quint` is a gen error.
+reports it. A regression file without `#meta.ash_quint`, one that isn't
+JSON, or one the model's action and result paths no longer read is a gen
+error; delete the file if it no longer applies.
 When the model has changed since the trace was found, gen keeps it and
 says so:
 
@@ -438,7 +443,15 @@ except `init_action`, binding the action's picks, and a `project/1` with
 every model variable, its type as a comment; each body is a `todo!/1`
 that raises `<adapter>: <what> is not implemented yet`, so the files
 compile without warnings and every replay fails at its first step until
-you fill them in:
+you fill them in. `test/support` must be compiled in the test
+environment; Phoenix projects already have this in `mix.exs`, otherwise
+add it:
+
+```elixir
+defp elixirc_paths(:test), do: ["lib", "test/support"]
+defp elixirc_paths(_env), do: ["lib"]
+# in project/0: elixirc_paths: elixirc_paths(Mix.env())
+```
 
 ```elixir
 # Inc({ ctr: str, by: int })
@@ -917,8 +930,9 @@ use AshQuint.Case,
   explore: true            # or [max_steps: 20, batch: 25]
 ```
 
-It defines `"explore counter"`, tagged `quint_explore: :counter`,
-`quint_model: :counter` and `timeout: :infinity`. `max_steps` is the
+It defines `"explore counter"`, tagged `quint_explore: :counter` and
+`timeout: :infinity`, but not `quint_model:`, so
+`mix test --only quint_model:counter` leaves it out. `max_steps` is the
 length of the fresh traces (default: the model's `random:` `max_steps`,
 else Quint's), `batch` the traces per `quint run` (default 20; each run
 costs about a second, mostly Node start-up). The model needs `random:`:
@@ -992,7 +1006,9 @@ at the last step), `did not reproduce on a second replay; full trace` or
 `adapter raised; full trace`. Fix the bug, promote the candidate (see
 "Regression traces"), and the committed suite keeps it as
 `"regression 4031_2"`. A Quint failure ends the session and fails the
-test with Quint's output, after the failures found so far.
+test with Quint's output, after the failures found so far; so does a
+fresh trace that can't be read (`fresh trace 4031_7 of :counter could not
+be read: …`).
 
 Two modules of one model (`traces: :sequential` and `traces: :concurrent`)
 each run their own session. Concurrent traces need the same care as the

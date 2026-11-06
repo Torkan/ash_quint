@@ -31,14 +31,22 @@
   own `seed`. `AshQuint.Case` generates a `"regression <seed>_<index>"`
   test for it, tagged `quint: :regression` and replayed with that seed.
   `mix ash_quint.gen` keeps regression files as they are, notes one found
-  against an earlier model, and refuses one without provenance. Manifest
-  entries may carry an integer `seed`; `AshQuint.Gen` gains
-  `provenance/1`, `put_provenance/2`, `regression_file/2` and
-  `regression_entry!/3`, and its `generated` map `notes`.
+  against an earlier model, and refuses one without provenance, one that
+  isn't JSON or one the model no longer reads. Promote refuses a target
+  the manifest still lists after its file was deleted. Manifest entries
+  may carry an integer `seed`, and two entries for one file are a decode
+  error; `AshQuint.Gen` gains `provenance/1`, `put_provenance/2`,
+  `regression_file/2` and `regression_entry!/3`, and its `generated` map
+  `notes`.
 - For Mix tasks and tooling: `AshQuint.Manifest.load/3` reads a model's
   manifest, with errors that ask for a regeneration (`need: :outcomes` or
-  `:interface`); `AshQuint.Config.Model.replay_opts/1` gives a model's
-  replay options; `AshQuint.Step.roots/1` the action and result roots.
+  `:interface`; a manifest from a newer ash_quint asks for an upgrade
+  instead); `AshQuint.Config.Model.replay_opts/1` gives a model's replay
+  options; `AshQuint.Step.roots/1` the action and result roots;
+  `AshQuint.Gen.run_quint/3` runs the configured Quint in the project
+  root, and `AshQuint.Gen.interface_command/3` is the `quint compile`
+  command gen runs for the interface (a new `:interface` kind of
+  `t:AshQuint.Gen.command/0`).
 - The manifest is format 3. Each trace records `outcomes`, the result
   labels counted per action (empty for models without `lastResult`), and
   the manifest records the model's `interface`: `mix ash_quint.gen` runs

@@ -74,6 +74,7 @@ defmodule AshQuint.Manifest do
 
   @version 3
   @versions [1, 2, 3]
+  @upgrade "upgrade ash_quint"
 
   defstruct version: @version, quint: nil, seed: nil, models: %{}, traces: [], interface: nil
 
@@ -186,7 +187,8 @@ defmodule AshQuint.Manifest do
   the manifest and ends asking for `MIX_ENV=test mix ash_quint.gen <model>`:
   a missing or unreadable file,
   an invalid manifest (see `decode!/2`), and one written before what
-  `:need` asks for was recorded.
+  `:need` asks for was recorded. A manifest written by a newer ash_quint
+  asks for an upgrade instead.
 
   Options: `:need` — `:outcomes` (format 2 or later) or `:interface`
   (format 3). Default: any format.
@@ -223,10 +225,16 @@ defmodule AshQuint.Manifest do
     end
   end
 
+  # Regenerating doesn't help with a manifest from a newer ash_quint.
   defp decode(binary, path, regen) do
     {:ok, decode!(binary, path)}
   rescue
-    error in ArgumentError -> {:error, Exception.message(error) <> "; " <> regen}
+    error in ArgumentError ->
+      message = Exception.message(error)
+
+      if String.ends_with?(message, @upgrade),
+        do: {:error, message},
+        else: {:error, message <> "; " <> regen}
   end
 
   defp outdated(model, path, what, version, regen) do
@@ -236,15 +244,23 @@ defmodule AshQuint.Manifest do
 
   @doc """
   Decodes manifest JSON. `path` is used in error messages. Raises
-  `ArgumentError` for invalid JSON, a version other than 1, 2 or 3, an
-  unknown trace source or a malformed field (version 3 needs an
-  `interface`).
+  `ArgumentError` for invalid JSON, a version other than 1, 2 or 3 (a
+  later one was written by a newer ash_quint), an unknown trace source, a
+  malformed field (version 3 needs an `interface`) or two entries for the
+  same file.
   """
   @spec decode!(binary(), String.t()) :: t()
   def decode!(binary, path) do
     case Jason.decode(binary) do
       {:ok, %{"ash_quint" => version} = json} when version in @versions ->
         from_json(json, version, path)
+
+      {:ok, %{"ash_quint" => version}} when is_integer(version) and version > @version ->
+        fail!(
+          path,
+          "written by a newer ash_quint (manifest format #{version}; " <>
+            "this version reads formats 1 to #{@version}); #{@upgrade}"
+        )
 
       {:ok, %{"ash_quint" => version}} ->
         fail!(path, "unsupported manifest version #{inspect(version)}")
@@ -262,6 +278,8 @@ defmodule AshQuint.Manifest do
     seed = field!(json, "seed", &is_integer/1, "an integer", path)
     models = field!(json, "models", &string_map?/1, "a map of strings", path)
     traces = field!(json, "traces", &is_list/1, "a list", path)
+    traces = traces |> Enum.with_index() |> Enum.map(&entry!(&1, version, path))
+    check_unique!(traces, path)
 
     %__MODULE__{
       version: version,
@@ -269,8 +287,17 @@ defmodule AshQuint.Manifest do
       quint: quint,
       seed: seed,
       models: models,
-      traces: traces |> Enum.with_index() |> Enum.map(&entry!(&1, version, path))
+      traces: traces
     }
+  end
+
+  defp check_unique!(traces, path) do
+    files = Enum.map(traces, & &1.file)
+
+    case Enum.sort(files -- Enum.uniq(files)) do
+      [] -> :ok
+      [file | _rest] -> fail!(path, "invalid manifest: more than one entry for #{file}")
+    end
   end
 
   defp field!(json, key, valid?, expected, path) do

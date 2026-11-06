@@ -893,6 +893,59 @@ defmodule AshQuint.GenTest do
                   "only mix ash_quint.promote writes regression traces"}
     end
 
+    test "keeps regression traces under a root with glob characters", %{tmp_dir: tmp_dir} do
+      root = Path.join(tmp_dir, "root[1]")
+      write_models(root)
+      {out, binary} = put_regression(root)
+      generated = generate_counter(root, Path.join(tmp_dir, "gen"))
+
+      assert generated.files["regression_5_1.itf.json"] == binary
+      Gen.write!(out, generated)
+      assert File.read!(Path.join(out, "regression_5_1.itf.json")) == binary
+    end
+
+    test "a regression file that isn't JSON is an error", %{root: root, tmp: tmp} do
+      out = Path.join(root, "priv/x/traces")
+      File.mkdir_p!(out)
+      File.write!(Path.join(out, "regression_5_1.itf.json"), "{")
+      config = config(root)
+
+      assert {:error, message} =
+               Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp)
+
+      assert message =~
+               ~r/\Amodel :counter: regression_5_1\.itf\.json is not valid JSON \(.+\); delete it if it no longer applies\z/
+    end
+
+    test "a regression trace the model no longer reads is an error", %{root: root, tmp: tmp} do
+      out = Path.join(root, "priv/x/traces")
+      File.mkdir_p!(out)
+      hash = Manifest.hash_file(Path.join(root, @model_file))
+
+      # The model's action variable is lastAction; this trace has none.
+      binary =
+        Jason.encode!(%{
+          "#meta" => %{"format" => "ITF"},
+          "vars" => ["n"],
+          "states" => [%{"n" => 0}, %{"n" => 1}]
+        })
+        |> Gen.put_provenance(%{
+          "model" => "counter",
+          "model_hash" => hash,
+          "seed" => 5,
+          "index" => 1
+        })
+
+      File.write!(Path.join(out, "regression_5_1.itf.json"), binary)
+      config = config(root)
+
+      assert {:error, message} =
+               Gen.generate(config, [config.models.counter], runner: stub(self()), tmp_dir: tmp)
+
+      assert message =~
+               ~r/\Amodel :counter: regression_5_1\.itf\.json no longer fits the model \(regression_5_1\.itf\.json, state 1: .+\); delete it if it no longer applies\z/
+    end
+
     test "deleting a regression file drops its entry", %{root: root, tmp: tmp} do
       {out, _binary} = put_regression(root)
       Gen.write!(out, generate_counter(root, tmp))

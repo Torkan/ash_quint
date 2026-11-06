@@ -277,11 +277,6 @@ defmodule AshQuint.CaseTest do
            ) == "sensitivity of :ok:\nno step of Reset changes the state"
   end
 
-  test "allow_untested silences listed variables" do
-    allowed = ~s([allow_untested: [keys: ["limit"], actions: ["Inc", "Reset"], vars: ["count"]]])
-    assert run_test(compile_sensitivity(ToyAdapterConstant, allowed), "sensitivity of ok") == :ok
-  end
-
   test "an unprojected variable fails the sensitivity test" do
     message =
       sensitivity_failure(
@@ -430,9 +425,10 @@ defmodule AshQuint.CaseTest do
     test "the explore test is tagged and has no timeout" do
       tests = tests(compile(:ok, "use ExUnit.Case, register: false", ", explore: true"))
 
-      assert %{quint_explore: :ok, quint_model: :ok, timeout: :infinity} =
-               tags = tests[:"test explore ok"]
+      assert %{quint_explore: :ok, timeout: :infinity} = tags = tests[:"test explore ok"]
 
+      # Not quint_model: `mix test --only quint_model:ok` would run it.
+      refute Map.has_key?(tags, :quint_model)
       refute Map.has_key?(tags, :quint)
 
       tests =

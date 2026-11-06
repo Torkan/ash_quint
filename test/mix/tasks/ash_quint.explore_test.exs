@@ -12,6 +12,8 @@ defmodule Mix.Tasks.AshQuint.ExploreTest do
   setup %{tmp_dir: tmp_dir} do
     File.cp!("ash_quint.exs", Path.join(tmp_dir, "ash_quint.exs"))
     previous = Map.new(@env, &{&1, System.get_env(&1)})
+    # The tests assume a clean env, whatever the shell running them set.
+    Enum.each(@env, &System.delete_env/1)
 
     on_exit(fn ->
       Enum.each(previous, fn
@@ -39,7 +41,6 @@ defmodule Mix.Tasks.AshQuint.ExploreTest do
   test "runs mix test for each model's explore test with the settings in the env",
        %{root: root} do
     System.put_env("ASH_QUINT_EXPLORE_RUNS", "3")
-    System.delete_env("ASH_QUINT_EXPLORE_SEED")
 
     argv =
       ~w(counter race --runs 500 --seed 7 --budget 60 --failures 3)
@@ -69,7 +70,6 @@ defmodule Mix.Tasks.AshQuint.ExploreTest do
   end
 
   test "without models it runs every explore test", %{root: root} do
-    Enum.each(@env, &System.delete_env/1)
     assert explore(root, []) == :ok
 
     assert_received {:run, "test", ["--raise", "--only", "quint_explore"], env}

@@ -32,13 +32,16 @@ defmodule AshQuint.Explore do
   otherwise the full trace is. An exception from the adapter is a failure
   too, with the full trace. The candidate gets its provenance
   (`AshQuint.Gen.put_provenance/2`: model, model hash, seed, index, Quint
-  version and arguments, full step count, `cut_at`) and is written to
+  version and arguments (without `--out-itf`, so they reproduce the batch
+  with any out path), full step count, `cut_at`) and is written to
   `<build>/ash_quint/explore/<model>/regression_<seed>_<index>.itf.json`,
   from where `mix ash_quint.promote` commits it.
 
   The session stops when `runs` traces are generated, `failures` failures
   are found, the budget is spent (checked before each batch but the
-  first), or Quint fails.
+  first), Quint fails, or a fresh trace can't be normalized, decoded or
+  selected; the last two are the report's `error`, after the failures
+  found so far.
   """
 
   alias AshQuint.Config
@@ -258,38 +261,53 @@ defmodule AshQuint.Explore do
 
   defp replay_all(session, report, files, seed, args) do
     Enum.reduce_while(files, {:cont, report}, fn {index, path}, {:cont, report} ->
-      binary = Gen.normalize(File.read!(path))
-      report = explore(session, report, binary, seed, index, args)
-
-      if length(report.failures) >= session.settings.failures,
-        do: {:halt, {:halt, report}},
-        else: {:cont, {:cont, report}}
+      case fresh(session, path, seed, index) do
+        {:ok, fresh} -> next(session, explore(session, report, fresh, {seed, index, args}))
+        {:error, message} -> {:halt, {:halt, %{report | error: message}}}
+      end
     end)
   end
 
-  defp explore(session, report, binary, seed, index, args) do
-    name = "#{seed}_#{index}"
-    trace = decode(binary, name, seed)
+  defp next(session, report) do
+    if length(report.failures) >= session.settings.failures,
+      do: {:halt, {:halt, report}},
+      else: {:cont, {:cont, report}}
+  end
 
-    if selected?(session, trace, index) do
-      report = %{report | replayed: report.replayed + 1}
+  # A fresh trace normalized, decoded and checked against the selection;
+  # one that can't be is the session's error.
+  defp fresh(session, path, seed, index) do
+    binary = Gen.normalize(File.read!(path))
+    trace = decode(binary, "#{seed}_#{index}", seed)
+    {:ok, %{binary: binary, trace: trace, selected: selected?(session, trace, index)}}
+  rescue
+    error in [Jason.DecodeError, ITF.Error, ArgumentError] ->
+      {:error,
+       "fresh trace #{seed}_#{index} of #{inspect(session.model.name)} could not be read: " <>
+         Exception.message(error)}
+  end
 
-      case replay(session, trace) do
-        :ok ->
-          report
+  defp explore(_session, report, %{selected: false}, _origin),
+    do: %{report | skipped: report.skipped + 1}
 
-        {:failed, failure_index, message} ->
-          {candidate, cut_at, reproduced} = confirm(session, binary, name, seed, failure_index)
-          failure = failure(session, {seed, index, args}, binary, candidate, message, cut_at)
-          %{report | failures: [Map.put(failure, :reproduced, reproduced) | report.failures]}
+  defp explore(session, report, %{binary: binary, trace: trace}, {seed, index, _args} = origin) do
+    report = %{report | replayed: report.replayed + 1}
 
-        {:raised, banner} ->
-          message = "#{session.model.name} regression #{name}: #{banner}"
-          failure = failure(session, {seed, index, args}, binary, binary, message, nil)
-          %{report | failures: [Map.put(failure, :reproduced, nil) | report.failures]}
-      end
-    else
-      %{report | skipped: report.skipped + 1}
+    case replay(session, trace) do
+      :ok ->
+        report
+
+      {:failed, failure_index, message} ->
+        {candidate, cut_at, reproduced} =
+          confirm(session, binary, trace.name, seed, failure_index)
+
+        failure = failure(session, origin, binary, candidate, message, cut_at)
+        %{report | failures: [Map.put(failure, :reproduced, reproduced) | report.failures]}
+
+      {:raised, banner} ->
+        message = "#{session.model.name} regression #{seed}_#{index}: #{banner}"
+        failure = failure(session, origin, binary, binary, message, nil)
+        %{report | failures: [Map.put(failure, :reproduced, nil) | report.failures]}
     end
   end
 
@@ -354,7 +372,8 @@ defmodule AshQuint.Explore do
       "seed" => seed,
       "index" => index,
       "quint" => session.config.quint,
-      "args" => args,
+      # Without the batch's temp --out-itf path, which means nothing later.
+      "args" => Enum.reject(args, &String.starts_with?(&1, "--out-itf=")),
       "steps" => length(Jason.decode!(full)["states"]) - 1,
       "cut_at" => cut_at
     }

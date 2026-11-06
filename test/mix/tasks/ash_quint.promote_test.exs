@@ -158,6 +158,20 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
     refuses(root, [file], "#{file}: #{@target} already exists")
   end
 
+  test "refuses a target the manifest still lists", %{root: root} do
+    file = candidate(root, "a.itf.json")
+    promote(root, [file])
+    infos()
+    File.rm!(Path.join(root, @target))
+
+    refuses(
+      root,
+      [file],
+      "#{file}: regression_4031_2.itf.json is already in #{@manifest}; " <>
+        "run MIX_ENV=test mix ash_quint.gen counter to drop entries whose files are gone"
+    )
+  end
+
   test "refuses two candidates with the same target", %{root: root} do
     a = candidate(root, "a.itf.json")
     b = candidate(root, "b.itf.json")
@@ -168,7 +182,15 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
   test "refuses an unknown model", %{root: root} do
     file = candidate(root, "a.itf.json", %{"model" => "nope"})
 
-    refuses(root, [file], "model :nope is not configured in ash_quint.exs")
+    refuses(root, [file], "#{file}: model :nope is not configured in ash_quint.exs")
+  end
+
+  test "refuses a missing candidate", %{root: root} do
+    refuses(
+      root,
+      ["candidates/nope.itf.json"],
+      "candidates/nope.itf.json: could not read it (no such file or directory)"
+    )
   end
 
   test "refuses a missing manifest", %{root: root} do
@@ -215,6 +237,20 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
       "#{file}: counter: #{@manifest} was written before ash_quint recorded " <>
         "the model interface (manifest format 2); " <>
         "run MIX_ENV=test mix ash_quint.gen counter to regenerate it"
+    )
+  end
+
+  test "refuses a manifest from a newer ash_quint", %{root: root} do
+    file = candidate(root, "a.itf.json")
+    path = Path.join(root, @manifest)
+    json = path |> File.read!() |> Jason.decode!() |> Map.put("ash_quint", 4)
+    File.write!(path, Jason.encode!(json))
+
+    refuses(
+      root,
+      [file],
+      "#{file}: #{@manifest}: written by a newer ash_quint (manifest format 4; " <>
+        "this version reads formats 1 to 3); upgrade ash_quint"
     )
   end
 

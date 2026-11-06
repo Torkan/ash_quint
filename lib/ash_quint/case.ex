@@ -65,7 +65,8 @@ defmodule AshQuint.Case do
   its own sensitivity test over its traces).
 
   With `explore:`, it also defines `"explore <model>"`, tagged
-  `quint_explore: <model>`, `quint_model: <model>` and `timeout: :infinity`,
+  `quint_explore: <model>` and `timeout: :infinity` (not `quint_model:`, so
+  selecting a model's tests by that tag leaves it out),
   which runs `AshQuint.Explore.run!/2`: it replays fresh `quint run`
   traces of the model's `random:` source with the module's adapter,
   `adapter_opts`, `replay` options and `traces:` selection, and fails
@@ -490,7 +491,8 @@ defmodule AshQuint.Case do
       ] ++ setup.explore
 
     quote do
-      @tag quint_explore: unquote(model), quint_model: unquote(model), timeout: :infinity
+      # Not quint_model:, so `mix test --only quint_model:<model>` leaves it out.
+      @tag quint_explore: unquote(model), timeout: :infinity
       ExUnit.Case.test unquote("explore #{model}") do
         AshQuint.Explore.run!(unquote(opts))
       end

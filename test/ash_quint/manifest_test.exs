@@ -317,10 +317,34 @@ defmodule AshQuint.ManifestTest do
     assert [%{actions: %{"Inc" => 1}, outcomes: nil}] = manifest.traces
   end
 
+  test "refuses a version from a newer ash_quint" do
+    assert_raise ArgumentError,
+                 "#{@path}: written by a newer ash_quint (manifest format 4; " <>
+                   "this version reads formats 1 to 3); upgrade ash_quint",
+                 fn -> Manifest.decode!(json(%{"ash_quint" => 4}), @path) end
+  end
+
   test "refuses an unknown version" do
-    assert_raise ArgumentError, "#{@path}: unsupported manifest version 4", fn ->
-      Manifest.decode!(json(%{"ash_quint" => 4}), @path)
+    for version <- [0, "3"] do
+      assert_raise ArgumentError,
+                   "#{@path}: unsupported manifest version #{inspect(version)}",
+                   fn -> Manifest.decode!(json(%{"ash_quint" => version}), @path) end
     end
+  end
+
+  test "refuses two entries for the same file" do
+    entry = %{
+      "file" => "random_0.itf.json",
+      "source" => "random",
+      "name" => "0",
+      "steps" => 1,
+      "actions" => %{"Inc" => 1},
+      "outcomes" => %{}
+    }
+
+    assert_raise ArgumentError,
+                 "#{@path}: invalid manifest: more than one entry for random_0.itf.json",
+                 fn -> Manifest.decode!(json(%{"traces" => [entry, entry]}), @path) end
   end
 
   test "a version 2 entry needs well-formed outcomes" do
