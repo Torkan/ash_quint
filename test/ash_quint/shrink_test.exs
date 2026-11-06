@@ -201,6 +201,17 @@ defmodule AshQuint.ShrinkTest do
            """
   end
 
+  test "wrapper/3 imports shrink: [import: …]" do
+    model = %{@counter | shrink: [import: "counter(CAP = 5)"]}
+
+    assert Shrink.wrapper(model, "./model", [{"shrink_0", ["inc(1)"]}]) == """
+           module ash_quint_shrink {
+             import counter(CAP = 5).* from "./model"
+             run shrink_0 = init.then(inc(1))
+           }
+           """
+  end
+
   test "import_path/2" do
     model = "/r/priv/examples/counter/model.qnt"
 
@@ -559,7 +570,20 @@ defmodule AshQuint.ShrinkTest do
         runner([], write: fn _ -> false end, output: "\nerror: [QNT404] Name 'act' not found\n")
 
       assert shrink(tmp_dir, 6, runner: runner, replay: replay([], 6)) ==
-               {:not_shrunk, "quint test failed: error: [QNT404] Name 'act' not found"}
+               {:not_shrunk,
+                "quint test failed: error: [QNT404] Name 'act' not found " <>
+                  ~s{(if random's main is an instance module, set shrink: [import: "<module>(<constants>)"])}}
+    end
+
+    test "quint test writing nothing, with import: set, gives no hint", %{tmp_dir: tmp_dir} do
+      runner =
+        runner([], write: fn _ -> false end, output: "\nerror: [QNT404] Name 'act' not found\n")
+
+      assert shrink(tmp_dir, 6,
+               model: toy_model(shrink: [import: "toy(N = 1)"]),
+               runner: runner,
+               replay: replay([], 6)
+             ) == {:not_shrunk, "quint test failed: error: [QNT404] Name 'act' not found"}
     end
 
     test "Quint that can't be run", %{tmp_dir: tmp_dir} do
@@ -721,20 +745,11 @@ defmodule AshQuint.ShrinkTest do
           {"shrink_#{k}", calls}
         end)
 
-      wrapper = Path.join(tmp_dir, "ash_quint_shrink.qnt")
-      import = Shrink.import_path(Path.expand(model.model), tmp_dir)
-      File.write!(wrapper, Shrink.wrapper(model, import, runs))
-
-      args =
-        ["test", wrapper, "--main=ash_quint_shrink", "--match=^shrink_[0-9]+$", "--seed=1"] ++
-          Gen.backend_args(model) ++ ["--out-itf=#{tmp_dir}/{test}.itf.json"]
-
-      runner = fn exe, args, opts -> System.cmd(exe, args, opts ++ [stderr_to_stdout: true]) end
-      assert {:ok, output, 0} = Gen.run_quint(@config, args, runner)
+      assert {output, statuses} = quint_wrapper(model, runs, tmp_dir)
+      assert Enum.all?(statuses, &(&1 == "ok")), output
 
       for {file, {name, _calls}} <- Enum.zip(files, runs) do
         run = Jason.decode!(File.read!(Path.join(tmp_dir, "#{name}.itf.json")))
-        assert run["#meta"]["status"] == "ok", output
         {states(file), ITF.decode!(run, name).states}
       end
     end
@@ -747,6 +762,47 @@ defmodule AshQuint.ShrinkTest do
 
     test "round 0 reproduces the committed race traces", %{tmp_dir: tmp_dir} do
       for {expected, actual} <- round_zero(@race, tmp_dir), do: assert(actual == expected)
+    end
+
+    # The wrapper of `runs` for `model`, run with one quint test: Quint's
+    # output and each run's #meta.status (nil when not written).
+    defp quint_wrapper(model, runs, tmp_dir) do
+      wrapper = Path.join(tmp_dir, "ash_quint_shrink.qnt")
+      import = Shrink.import_path(Path.expand(model.model), tmp_dir)
+      File.write!(wrapper, Shrink.wrapper(model, import, runs))
+
+      args =
+        ["test", wrapper, "--main=ash_quint_shrink", "--match=^shrink_[0-9]+$", "--seed=1"] ++
+          Gen.backend_args(model) ++ ["--out-itf=#{tmp_dir}/{test}.itf.json"]
+
+      runner = fn exe, args, opts -> System.cmd(exe, args, opts ++ [stderr_to_stdout: true]) end
+      {:ok, output, _status} = Gen.run_quint(@config, args, runner)
+
+      statuses =
+        for {name, _calls} <- runs do
+          case File.read(Path.join(tmp_dir, "#{name}.itf.json")) do
+            {:ok, binary} -> Jason.decode!(binary)["#meta"]["status"]
+            {:error, _reason} -> nil
+          end
+        end
+
+      {output, statuses}
+    end
+
+    test "an instance module as main needs shrink: [import: …]", %{tmp_dir: tmp_dir} do
+      model = %{
+        @counter
+        | model: "test/fixtures/shrink/instance/model.qnt",
+          random: Keyword.put(@counter.random, :main, "counter_app")
+      }
+
+      runs = [{"shrink_0", ["inc(1)", "inc(2)"]}]
+
+      assert {output, [nil]} = quint_wrapper(model, runs, tmp_dir)
+      assert output =~ "QNT404"
+
+      model = %{model | shrink: [import: "counter(CAP = 5)"]}
+      assert {_output, ["ok"]} = quint_wrapper(model, runs, tmp_dir)
     end
 
     test "round 0 with apply", %{tmp_dir: tmp_dir} do

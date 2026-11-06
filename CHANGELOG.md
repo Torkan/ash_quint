@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Shrinking: `shrink: [import: "counter(CAP = 5)"]` names what the
+  wrapper imports from the model file, for a `random: [main: …]` that is
+  an instance module (`import counter(CAP = 5).*`), whose actions an
+  import of `main` doesn't re-export. It must be a Quint module name,
+  optionally with overrides in parentheses. Without it, a round 0 whose
+  `quint test` fails with QNT404 suggests it.
+- The sensitivity test is also tagged `quint_sensitivity: <model>`, so
+  `mix test --exclude quint_sensitivity` skips it for every model.
 - Shrinking: with `shrink: true` (or `shrink: [apply: "apply", rounds: 20]`)
   for a model, explore shrinks each confirmed candidate before writing it
   (`AshQuint.Shrink`). The steps are rebuilt as a Quint run

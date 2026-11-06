@@ -293,7 +293,9 @@ defmodule AshQuint.CaseTest do
   test "sensitivity: true adds a passing sensitivity test" do
     mod = compile_sensitivity(ToyAdapter, "true")
 
-    assert %{quint_model: :ok} = tags = tests(mod)[:"test sensitivity of ok"]
+    assert %{quint_model: :ok, quint_sensitivity: :ok} =
+             tags = tests(mod)[:"test sensitivity of ok"]
+
     refute Map.has_key?(tags, :quint)
     assert run_test(mod, "sensitivity of ok") == :ok
   end

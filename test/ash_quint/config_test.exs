@@ -494,6 +494,25 @@ defmodule AshQuint.ConfigTest do
       assert counter(minimal(shrink: [apply: "_apply2"])).shrink == [apply: "_apply2"]
     end
 
+    test "shrink: import is a module or an instance" do
+      for import <- ["counter_app", "counter(CAP = 5)", "counter (CAP = 5, N = Set(\"a\"))"] do
+        assert counter(minimal(shrink: [import: import])).shrink == [import: import]
+      end
+
+      for import <- ["", "1counter", "counter.*", "counter(CAP = 5).*", "counter CAP"] do
+        assert_raises_config(
+          minimal(shrink: [import: import]),
+          "ash_quint.exs: models.counter.shrink.import must be a Quint module, " <>
+            ~s{or an instance like "counter(CAP = 5)", got #{inspect(import)}}
+        )
+      end
+
+      assert_raises_config(
+        minimal(shrink: [import: :counter]),
+        "ash_quint.exs: models.counter.shrink.import must be a string, got :counter"
+      )
+    end
+
     test "shrink: of another type is an error" do
       assert_raises_config(
         minimal(shrink: 1),

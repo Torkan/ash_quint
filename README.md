@@ -225,6 +225,7 @@ key, with its default:
       # Shrink explore candidates (see "Shrinking"); default: off.
       shrink: [
         apply: "apply",        # optional: the action that takes an action value
+        import: "counter",     # optional: the module or instance to import
         rounds: 20             # optional: the budget of rounds
       ]                        # or shrink: true, every default
     ]
@@ -778,7 +779,8 @@ model's manifest and defines:
   the manifest's;
 - `"traces for counter are current"`, which fails when a model file's hash
   no longer matches the manifest: run `mix ash_quint.gen counter`;
-- with `sensitivity:`, `"sensitivity of counter"` (see below);
+- with `sensitivity:`, `"sensitivity of counter"`, tagged
+  `quint_model: <model>` and `quint_sensitivity: <model>` (see below);
 - with `explore: true` (or `explore: [max_steps: 20, batch: 25]`),
   `"explore counter"`, which replays fresh traces and is excluded from
   the suite (see "Exploring").
@@ -809,6 +811,8 @@ debug info (defined in the test file itself, say) isn't checked.
 
 Select the tests by tag: `mix test --only quint_model:counter`,
 `mix test --only quint:witness`, `mix test --only quint:regression`.
+The sensitivity test replays every trace again; a quick alias can skip it
+for every model with `mix test --exclude quint_sensitivity`.
 
 Concurrent traces run their calls in op tasks, other processes than the
 test's. A private ETS table, per-process state or a database sandbox in
@@ -1287,9 +1291,9 @@ second replay shows.
 ### Shrinking
 
 A candidate is as long as the fresh trace up to its failure, mostly steps
-the bug doesn't need. With `shrink: true` (or `shrink: [apply: …, rounds:
-…]`) in the model's config, explore shrinks each confirmed candidate (one
-that failed at the same step on the second replay; not one that didn't
+the bug doesn't need. With `shrink: true` (or `shrink: [apply: …,
+import: …, rounds: …]`) in the model's config, explore shrinks each
+confirmed candidate (one that failed at the same step on the second replay; not one that didn't
 reproduce, nor an adapter exception) before writing it:
 
 ```text
@@ -1343,6 +1347,22 @@ How a step becomes a call:
   ```
 
   Every call is then `apply(IncStart({ op: "o1", by: 1 }))`.
+- **`import:`** is what the wrapper imports from the model file, by
+  default the `random: [main: …]` module. A Quint `import` doesn't
+  re-export what the imported module imports, so when `main` is an
+  instance module that sets the constants, the wrapper finds none of its
+  actions (`not shrunk: quint test failed: Error [QNT404]: Name 'init' not
+  found`). Name the instance instead:
+
+  ```quint
+  module counter_app {
+    import counter(CAP = 5).*
+  }
+  ```
+
+  with `shrink: [import: "counter(CAP = 5)"]`, written in the wrapper as
+  `import counter(CAP = 5).* from "<model>"`. Round 0 still checks that
+  the runs give back the candidate's states.
 
 Before the first round, a run of every step must give back the
 candidate's states, variable by variable: that checks the mapping. When

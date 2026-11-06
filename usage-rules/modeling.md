@@ -40,9 +40,13 @@ The practices behind these rules, with their sources, are in the README's
   fields in their declared order as arguments; a value or map pick is the
   one argument, and a unit variant is called bare. A model whose actions
   don't fit adds `action apply(a: Action): bool = match a { … }` and sets
-  `shrink: [apply: "apply"]`. Keep nondeterminism in `step`, not inside
-  the actions: shrinking checks that the calls give back the candidate's
-  states first, and doesn't shrink when they don't.
+  `shrink: [apply: "apply"]`. When `random`'s `main` is an instance
+  module (`import counter(CAP = 5).*`), set
+  `shrink: [import: "counter(CAP = 5)"]`: an import doesn't re-export the
+  instance, so the wrapper can't see its actions otherwise. Keep
+  nondeterminism in `step`, not inside the actions: shrinking checks that
+  the calls give back the candidate's states first, and doesn't shrink
+  when they don't.
 - With concurrency, model what the system visibly shows: the replay
   compares state while calls are in flight, so uncommitted writes don't
   belong in projected variables.

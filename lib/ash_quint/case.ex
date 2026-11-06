@@ -40,8 +40,9 @@ defmodule AshQuint.Case do
   replays run either way, since they need only the committed traces.
 
   With `sensitivity:`, it also defines `"sensitivity of <model>"`, tagged
-  `quint_model: <model>`, which runs `AshQuint.Sensitivity.check/3` on every
-  selected trace. It fails when a mutant survives, or when a key, an action
+  `quint_model: <model>` and `quint_sensitivity: <model>` (so
+  `--exclude quint_sensitivity` skips it for every model), which runs
+  `AshQuint.Sensitivity.check/3` on every selected trace. It fails when a mutant survives, or when a key, an action
   or an interleaving is untested and isn't allow-listed. An allow-listed
   target that is tested, or that the check doesn't know, fails too, so the
   list can't go stale.
@@ -465,7 +466,7 @@ defmodule AshQuint.Case do
     sensitivity_test =
       if setup.allow_untested do
         quote do
-          @tag quint_model: unquote(model)
+          @tag quint_model: unquote(model), quint_sensitivity: unquote(model)
           ExUnit.Case.test unquote("sensitivity of #{model}") do
             AshQuint.Case.__check_sensitivity__(
               unquote(model),

@@ -40,9 +40,12 @@ defmodule AshQuint.Config do
   `witnesses`, the tests file's for `scenarios`. `shrink` turns on the
   shrinking of explore candidates (see `AshQuint.Shrink`): `true`, or a
   keyword list with `apply` (the name of a model action taking the action
-  value, called in place of each action's operator) and `rounds` (the budget of rounds,
-  default 20); `false` or unset is off. Each model needs at least
-  one of `random`, `witnesses` and `scenarios`. Unknown and duplicate keys
+  value, called in place of each action's operator), `import` (what the
+  shrink wrapper imports from the model file: by default `random`'s
+  `main`, or an instance like `"counter(CAP = 5)"` when `main` is an
+  instance module) and `rounds` (the budget of rounds, default 20);
+  `false` or unset is off. Each model needs at least one of `random`,
+  `witnesses` and `scenarios`. Unknown and duplicate keys
   are errors. Paths, the defaults built from a model's name included, must
   be relative to the project root and stay inside it; they are kept exactly
   as configured. Each model's `out` must be its own directory, not the
@@ -105,9 +108,12 @@ defmodule AshQuint.Config do
     shrink: :shrink
   ]
 
-  @shrink_keys [apply: :quint_name, rounds: :pos_integer]
+  @shrink_keys [apply: :quint_name, import: :quint_instance, rounds: :pos_integer]
 
   @quint_name ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/
+
+  # A module name, optionally with its instance's overrides: `counter(CAP = 5)`.
+  @quint_instance ~r/\A[A-Za-z_][A-Za-z0-9_]*(\s*\(.*\))?\z/s
 
   @source_keys %{
     random: [
@@ -298,6 +304,14 @@ defmodule AshQuint.Config do
   defp check!(:quint_name, value, path, root) do
     check!(:string, value, path, root)
     unless quint_name?(value), do: type_error!(path, "a Quint name", value)
+  end
+
+  defp check!(:quint_instance, value, path, root) do
+    check!(:string, value, path, root)
+
+    unless value =~ @quint_instance do
+      type_error!(path, ~s{a Quint module, or an instance like "counter(CAP = 5)"}, value)
+    end
   end
 
   defp check!(:integer, value, _path, _root) when is_integer(value), do: :ok

@@ -14,6 +14,11 @@ defmodule AshQuint.Shrink do
   instead, for a model action `apply(a: Action): bool` that matches on the
   variants.
 
+  The wrapper imports the `random: [main: …]` module. An import doesn't
+  re-export what that module imports, so when `main` is an instance module
+  (`module counter_app { import counter(CAP = 5).* }`), set
+  `shrink: [import: "counter(CAP = 5)"]` to import the instance itself.
+
   `shrink/3` runs the loop: round 0 checks that the candidate's calls give
   back its states, then each round removes chunks of the steps before the
   failing one and keeps the first reduction that Quint accepts as a run and
@@ -287,13 +292,13 @@ defmodule AshQuint.Shrink do
 
   @doc """
   The wrapper module `ash_quint_shrink`: it imports the model's
-  `random: [main: …]` module from `import_path` (relative to the
-  wrapper's directory, without `.qnt`) and declares one `run` per
-  `{name, calls}`.
+  `random: [main: …]` module (or `shrink: [import: …]`, an instance like
+  `counter(CAP = 5)`) from `import_path` (relative to the wrapper's
+  directory, without `.qnt`) and declares one `run` per `{name, calls}`.
   """
   @spec wrapper(Model.t(), String.t(), [{String.t(), [String.t()]}]) :: String.t()
   def wrapper(%Model{} = model, import_path, runs) do
-    main = Keyword.fetch!(model.random, :main)
+    main = (model.shrink || [])[:import] || Keyword.fetch!(model.random, :main)
 
     lines =
       Enum.map(runs, fn {name, calls} -> "  run #{name} = #{run_expression(model, calls)}\n" end)
@@ -378,7 +383,8 @@ defmodule AshQuint.Shrink do
 
     case file do
       nil ->
-        {:not_shrunk, "quint test failed: #{first_line(output)}"}
+        {:not_shrunk,
+         "quint test failed: #{first_line(output)}#{import_hint(session.model, output)}"}
 
       {_binary, %{"#meta" => %{"status" => "ok"}} = run} ->
         compare(ITF.decode!(json, "candidate"), ITF.decode!(run, "shrink_0"))
@@ -509,6 +515,16 @@ defmodule AshQuint.Shrink do
       end)
 
     {output, files}
+  end
+
+  # A name the wrapper can't resolve, with no import: set: most likely an
+  # instance module as main.
+  defp import_hint(model, output) do
+    if is_nil((model.shrink || [])[:import]) and String.contains?(output, "QNT404") do
+      " (if random's main is an instance module, set shrink: [import: \"<module>(<constants>)\"])"
+    else
+      ""
+    end
   end
 
   defp first_line(output) do
