@@ -243,6 +243,40 @@ defmodule AshQuint.ExploreTest do
       assert "--backend=rust" in recorded
     end
 
+    test "a failure block prints the quint command", %{tmp_dir: tmp_dir} do
+      report = run(settings(), [adapter_opts: [faults: [:off_by_one]]], tmp_dir)
+
+      assert [failure] = report.failures
+
+      assert failure.quint ==
+               "npx --yes @informalsystems/quint@0.33.1 run test/fixtures/case/ok/model.qnt " <>
+                 "--main=toy --seed=10 --max-steps=3 --max-samples=2 --n-traces=2 " <>
+                 "--out-itf=explore_{seq}.itf.json (trace 0)"
+
+      path = Path.relative_to_cwd(failure.candidate)
+
+      assert [_header, block] = String.split(Explore.format(:ok, report), "\n\n")
+
+      assert Enum.take(String.split(block, "\n"), -3) == [
+               "candidate: #{path} (cut to 1 steps)",
+               "quint:     " <> failure.quint,
+               "promote:   MIX_ENV=test mix ash_quint.promote #{path}"
+             ]
+
+      assert block ==
+               "#{failure.message}\ncandidate: #{path} (cut to 1 steps)\n" <>
+                 "quint:     #{failure.quint}\npromote:   MIX_ENV=test mix ash_quint.promote #{path}"
+    end
+
+    test "an explore failure's message has no context lines", %{tmp_dir: tmp_dir} do
+      report = run(settings(), [adapter_opts: [faults: [:off_by_one]]], tmp_dir)
+
+      assert [failure] = report.failures
+
+      assert List.last(String.split(failure.message, "\n")) ==
+               ~s(model step: Inc %{"by" => 1}, result :accepted)
+    end
+
     test "a failure at the last step isn't cut", %{tmp_dir: tmp_dir} do
       runner = runner("test/fixtures/case/ok/scenario_incTest.itf.json")
 
@@ -568,7 +602,8 @@ defmodule AshQuint.ExploreTest do
           message: "counter regression 4031_#{index}: failed",
           candidate: Path.join(dir, "regression_4031_#{index}.itf.json"),
           cut_at: cut_at,
-          reproduced: reproduced
+          reproduced: reproduced,
+          quint: if(index != 4, do: "npx quint run m.qnt --seed=4031 (trace #{index})")
         }
       end
 
@@ -595,14 +630,17 @@ defmodule AshQuint.ExploreTest do
 
                counter regression 4031_1: failed
                candidate: #{path}1.itf.json (cut to 5 steps)
+               quint:     npx quint run m.qnt --seed=4031 (trace 1)
                #{promote}1.itf.json
 
                counter regression 4031_2: failed
                candidate: #{path}2.itf.json (not cut)
+               quint:     npx quint run m.qnt --seed=4031 (trace 2)
                #{promote}2.itf.json
 
                counter regression 4031_3: failed
                candidate: #{path}3.itf.json (did not reproduce on a second replay; full trace)
+               quint:     npx quint run m.qnt --seed=4031 (trace 3)
                #{promote}3.itf.json
 
                counter regression 4031_4: failed
@@ -685,13 +723,19 @@ defmodule AshQuint.ExploreTest do
       tests = Map.new(mod.__ex_unit__().tests, &{&1.name, &1.tags})
       assert %{quint: :regression} = tests[:"test regression #{name}"]
 
-      # The promoted test fails with the message explore reported.
+      # The promoted test fails with the message explore reported, then the
+      # trace file and the quint command explore printed.
       error =
         assert_raise ExUnit.AssertionError, fn ->
           File.cd!(root, fn -> apply(mod, :"test regression #{name}", [%{}]) end)
         end
 
-      assert error.message == failure.message
+      assert error.message ==
+               failure.message <>
+                 "\ntrace: priv/examples/counter/traces/regression_#{name}.itf.json" <>
+                 "\nquint: " <> failure.quint
+
+      assert failure.quint =~ " --backend=rust --out-itf=explore_{seq}.itf.json (trace "
     end
 
     test "race with the read-modify-write action finds the lost update", %{tmp_dir: tmp_dir} do

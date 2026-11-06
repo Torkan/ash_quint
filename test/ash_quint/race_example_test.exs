@@ -85,7 +85,8 @@ defmodule AshQuint.RaceExampleTest do
              "race scenario raceTest, step 4 (IncDone), seed 20261104: " <>
                "op \"o1\" (started at step 1): " <>
                "outcome: expected {:rejected, \"over_limit\"}, got :accepted\n" <>
-               "key \"writes\":\n  expected: 1\n  actual:   2"
+               "key \"writes\":\n  expected: 1\n  actual:   2" <>
+               ~s(\nmodel step: IncDone %{"op" => "o1"}, result {:rejected, "over_limit"})
   end
 
   test "raceTest against :inc_atomic holds both ops at their gate until they complete" do

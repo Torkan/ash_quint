@@ -31,7 +31,8 @@ defmodule AshQuint.CounterExampleTest do
              """
              counter scenario incTest, step 1 (Inc), seed 20261102: key "counts":
                expected: %{"c1" => 2}
-               actual:   %{"c1" => 3}\
+               actual:   %{"c1" => 3}
+             model step: Inc %{"by" => 2, "ctr" => "c1"}, result :accepted\
              """
   end
 

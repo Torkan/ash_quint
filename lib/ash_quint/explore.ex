@@ -23,9 +23,11 @@ defmodule AshQuint.Explore do
   `max_steps` option, else the model's. Each fresh trace is normalized
   (`AshQuint.Gen.normalize/1`) and replayed with `AshQuint.Replay.run/3`
   in the calling process, named `"<seed>_<index>"` with source
-  `:regression`, so its failure message is the one its promoted test
-  prints. The `traces:` selection applies: a trace it leaves out (by the
-  manifest's `concurrent` rule) is only counted as skipped.
+  `:regression` and no `:context`, so its failure message is the start of
+  the one its promoted test prints (which adds the `trace:` and `quint:`
+  lines, see `AshQuint.Case`). The `traces:` selection applies: a trace it
+  leaves out (by the manifest's `concurrent` rule) is only counted as
+  skipped.
 
   A replay that fails at step N is cut to its states 0..N and replayed
   once more: if it fails at N again, the cut trace is the candidate,
@@ -74,7 +76,8 @@ defmodule AshQuint.Explore do
           message: String.t(),
           candidate: Path.t(),
           cut_at: non_neg_integer() | nil,
-          reproduced: boolean() | nil
+          reproduced: boolean() | nil,
+          quint: String.t() | nil
         }
 
   @type report :: %{
@@ -382,7 +385,14 @@ defmodule AshQuint.Explore do
     File.mkdir_p!(session.out)
     File.write!(path, Gen.put_provenance(candidate, provenance))
 
-    %{seed: seed, index: index, message: message, candidate: path, cut_at: cut_at}
+    %{
+      seed: seed,
+      index: index,
+      message: message,
+      candidate: path,
+      cut_at: cut_at,
+      quint: Gen.quint_line(session.config, provenance)
+    }
   end
 
   @doc """
@@ -426,8 +436,9 @@ defmodule AshQuint.Explore do
   `explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped`.
   Otherwise a header line counts the failures, followed, each after a
   blank line, by each failure's message, its candidate (relative to the
-  current directory) and the `mix ash_quint.promote` command for it, and
-  then the error.
+  current directory), the `quint run` command that regenerates its trace
+  (`AshQuint.Gen.quint_line/2`) and the `mix ash_quint.promote` command
+  for it, and then the error.
   """
   @spec format(atom(), report()) :: String.t()
   def format(model, %{failures: [], error: nil} = report), do: summary(model, report)
@@ -463,8 +474,13 @@ defmodule AshQuint.Explore do
         %{cut_at: cut_at} -> "cut to #{cut_at} steps"
       end
 
-    "#{failure.message}\ncandidate: #{path} (#{how})\n" <>
-      "promote:   MIX_ENV=test mix ash_quint.promote #{path}"
+    quint = if failure.quint, do: ["quint:     " <> failure.quint], else: []
+
+    Enum.join(
+      ["#{failure.message}", "candidate: #{path} (#{how})"] ++
+        quint ++ ["promote:   MIX_ENV=test mix ash_quint.promote #{path}"],
+      "\n"
+    )
   end
 
   defp seeds(%{seeds: first..last//_}), do: "#{first}..#{last}"

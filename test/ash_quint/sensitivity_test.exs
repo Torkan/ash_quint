@@ -396,7 +396,8 @@ defmodule AshQuint.SensitivityTest do
     assert error.message ==
              "sensitivity needs passing replays; " <>
                "counter random t, step 1 (Inc), seed 7: key \"count\":\n" <>
-               "  expected: 1\n  actual:   2"
+               "  expected: 1\n  actual:   2" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "format/1" do

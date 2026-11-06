@@ -541,6 +541,32 @@ defmodule AshQuint.Gen do
   end
 
   @doc """
+  The command that regenerates an explored trace, from its provenance
+  (see `provenance/1`): the configured Quint command, the provenance's
+  `"args"` and `--out-itf=explore_{seq}.itf.json`, joined by spaces and
+  followed by ` (trace <index>)`, the trace among the run's outputs.
+  A word with a character outside `[A-Za-z0-9_./=:@{},+-]` is
+  single-quoted for a POSIX shell. `nil` when `"args"` isn't a list of
+  strings or `"index"` isn't a non-negative integer.
+  """
+  @spec quint_line(Config.t(), map()) :: String.t() | nil
+  def quint_line(%Config{} = config, %{"args" => args, "index" => index})
+      when is_list(args) and is_integer(index) and index >= 0 do
+    if Enum.all?(args, &is_binary/1) do
+      words = Config.quint_cmd(config) ++ args ++ ["--out-itf=explore_{seq}.itf.json"]
+      Enum.map_join(words, " ", &shell_word/1) <> " (trace #{index})"
+    end
+  end
+
+  def quint_line(%Config{}, _provenance), do: nil
+
+  defp shell_word(word) do
+    if word =~ ~r/\A[A-Za-z0-9_.\/=:@{},+-]+\z/,
+      do: word,
+      else: "'" <> String.replace(word, "'", "'\\''") <> "'"
+  end
+
+  @doc """
   Sets a trace's provenance (see `provenance/1`): `#meta.ash_quint`
   becomes `provenance`, with its keys sorted, replacing an earlier one in
   place or else appended to the top-level `#meta`. Everything else is

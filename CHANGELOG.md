@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Reproduction lines: every replay failure message now ends, after its
+  problems (and the `in flight:` line), with
+  `model step: <action>[ <picks>][, result <result>]` (none at step 0),
+  then the lines of a new `AshQuint.Replay.run/3` option `:context`
+  (default `[]`). The prefix
+  `<model> <source> <name>, step <i> (<action>), seed <seed>: ` is
+  unchanged. `AshQuint.Case` trace tests add `trace: <path>` and, for a
+  regression trace with provenance, `quint: <command>`, a paste-ready
+  `quint run` that regenerates it (`AshQuint.Gen.quint_line/2`). An
+  explore failure block prints the same `quint:` line before `promote:`,
+  and `t:AshQuint.Explore.failure/0` gains `quint`.
 - Simulator backend: `backend: "rust" | "typescript"` in `ash_quint.exs`,
   at the top level or per model, is passed as `--backend` to every
   `quint run` and `quint test` that gen and explore run (never to

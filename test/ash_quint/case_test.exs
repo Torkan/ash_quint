@@ -68,7 +68,46 @@ defmodule AshQuint.CaseTest do
     error = assert_raise ExUnit.AssertionError, fn -> run_test(mod, "scenario incTest") end
 
     assert error.message ==
-             "ok scenario incTest, step 1 (Inc), seed 7: key \"count\":\n  expected: 2\n  actual:   3"
+             "ok scenario incTest, step 1 (Inc), seed 7: key \"count\":\n  expected: 2\n  actual:   3\n" <>
+               ~s(model step: Inc %{"by" => 2}, result :accepted\n) <>
+               "trace: test/fixtures/case/ok/scenario_incTest.itf.json"
+  end
+
+  describe "context lines" do
+    defp failing(model) do
+      compile(
+        model,
+        "use ExUnit.Case, register: false",
+        ", adapter_opts: [faults: [:off_by_one]]"
+      )
+    end
+
+    defp failure_lines(mod, name) do
+      error = assert_raise ExUnit.AssertionError, fn -> run_test(mod, name) end
+      String.split(error.message, "\n")
+    end
+
+    test "a trace test's failure names the trace file" do
+      assert List.last(failure_lines(failing(:ok), "random 0")) ==
+               "trace: test/fixtures/case/ok/random_0.itf.json"
+    end
+
+    test "a regression with provenance prints its quint command" do
+      assert Enum.take(failure_lines(failing(:promoted), "regression 4031_2"), -3) == [
+               ~s(model step: Inc %{"by" => 1}, result :accepted),
+               "trace: test/fixtures/case/promoted/regression_4031_2.itf.json",
+               "quint: npx --yes @informalsystems/quint@0.33.1 run " <>
+                 "test/fixtures/case/promoted/model.qnt --main=ok --seed=4031 " <>
+                 "--out-itf=explore_{seq}.itf.json (trace 2)"
+             ]
+    end
+
+    test "a scenario trace has no quint line" do
+      assert Enum.take(failure_lines(failing(:promoted), "scenario incTest"), -2) == [
+               ~s(model step: Inc %{"by" => 2}, result :accepted),
+               "trace: test/fixtures/case/promoted/scenario_incTest.itf.json"
+             ]
+    end
   end
 
   test "a regression entry gets its own test with its seed" do

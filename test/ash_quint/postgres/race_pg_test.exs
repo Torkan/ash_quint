@@ -48,7 +48,8 @@ defmodule AshQuint.Postgres.RacePgTest do
              "race scenario raceTest, step 4 (IncDone), seed 20261104: " <>
                "op \"o1\" (started at step 1): " <>
                "outcome: expected {:rejected, \"over_limit\"}, got :accepted\n" <>
-               "key \"writes\":\n  expected: 1\n  actual:   2"
+               "key \"writes\":\n  expected: 1\n  actual:   2\n" <>
+               ~s(model step: IncDone %{"op" => "o1"}, result {:rejected, "over_limit"})
   end
 
   test "finish/2 deletes the replay's row, pass or fail" do

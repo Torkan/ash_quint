@@ -22,7 +22,10 @@ defmodule AshQuint.Case do
       `quint_concurrent: true` when the manifest marks the trace
       concurrent), which replays the trace with `AshQuint.Replay.run!/3`,
       with the manifest's seed, or a regression entry's own seed (the
-      seed it was found with; see `mix ash_quint.promote`);
+      seed it was found with; see `mix ash_quint.promote`). Its failure
+      message ends with `trace: <path>`, the trace file from the project
+      root, and, for a regression trace with provenance, `quint: <command>`,
+      the `quint run` that regenerates it (`AshQuint.Gen.quint_line/2`);
     * `"traces for <model> are current"`, tagged `quint_model: <model>`,
       which fails when a model file's hash differs from the manifest's, so
       the traces need regenerating with `mix ash_quint.gen`.
@@ -115,7 +118,7 @@ defmodule AshQuint.Case do
       (the replay's defaults).
   """
 
-  alias AshQuint.{Config, Manifest, Sensitivity, Trace}
+  alias AshQuint.{Config, Gen, Manifest, Sensitivity, Trace}
   alias AshQuint.Config.Model
 
   @doc false
@@ -156,6 +159,7 @@ defmodule AshQuint.Case do
       adapter: adapter,
       adapter_opts: Keyword.get(opts, :adapter_opts, []),
       config: model_config,
+      project_config: config,
       root: config.root,
       config_file: Path.expand(config_path, config.root),
       manifest: manifest,
@@ -507,6 +511,7 @@ defmodule AshQuint.Case do
 
   defp trace_test(entry, out, setup, replay_opts) do
     {path, trace_opts} = trace(entry, out, setup.manifest.seed)
+    replay_opts = replay_opts ++ [context: context(entry, path, setup)]
     tags = [quint: entry.source, quint_model: setup.model]
     tags = if entry.concurrent, do: tags ++ [quint_concurrent: true], else: tags
 
@@ -519,6 +524,26 @@ defmodule AshQuint.Case do
           unquote(replay_opts)
         )
       end
+    end
+  end
+
+  # A trace test's failure ends with the trace's path, and for a regression
+  # trace with provenance the command that regenerates it.
+  defp context(entry, path, setup) do
+    trace_line = "trace: " <> Path.join(setup.config.out, entry.file)
+
+    case entry.source == :regression and quint_line(path, setup.project_config) do
+      line when is_binary(line) -> [trace_line, "quint: " <> line]
+      _none -> [trace_line]
+    end
+  end
+
+  defp quint_line(path, config) do
+    with {:ok, binary} <- File.read(path),
+         {:ok, provenance} <- Gen.provenance(binary) do
+      Gen.quint_line(config, provenance)
+    else
+      _error -> nil
     end
   end
 

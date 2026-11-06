@@ -214,7 +214,8 @@ defmodule AshQuint.ReplayTest do
 
   test "outcome mismatch" do
     assert message(clean(), [:wrong_code]) ==
-             ~s(counter random t, step 3 \(Inc\), seed 7: outcome: expected {:rejected, "too_big"}, got {:rejected, "other"})
+             ~s(counter random t, step 3 \(Inc\), seed 7: outcome: expected {:rejected, "too_big"}, got {:rejected, "other"}) <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result {:rejected, "too_big"})
   end
 
   test "failed system call" do
@@ -224,13 +225,15 @@ defmodule AshQuint.ReplayTest do
 
     assert failure.message ==
              "#{@prefix} 1 (Inc), seed 7: system call failed: db down\n" <>
-               "key \"count\":\n  expected: 1\n  actual:   0"
+               "key \"count\":\n  expected: 1\n  actual:   0" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "failed call fails even without an expected result" do
     assert message(clean(), [:crash], results: false) ==
              "#{@prefix} 1 (Inc), seed 7: system call failed: db down\n" <>
-               "key \"count\":\n  expected: 1\n  actual:   0"
+               "key \"count\":\n  expected: 1\n  actual:   0" <>
+               ~s(\nmodel step: Inc %{"by" => 1})
   end
 
   test "absent result skips the outcome assertion" do
@@ -239,7 +242,8 @@ defmodule AshQuint.ReplayTest do
 
   test "state mismatch shows a per-key diff" do
     assert message(clean(), [:off_by_one]) ==
-             "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2"
+             "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "the diff pretty-prints large values" do
@@ -248,20 +252,24 @@ defmodule AshQuint.ReplayTest do
 
     assert message(states) ==
              "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: " <>
-               inspect(big, pretty: true) <> "\n  actual:   1"
+               inspect(big, pretty: true) <>
+               ~s(\n  actual:   1\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "a short map mismatch keeps the expected/actual form" do
     assert message(clean(), [:off_by_one], adapter: ShortMapAdapter) ==
              "#{@prefix} 1 (Inc), seed 7: key \"count\":\n" <>
-               "  expected: %{\"c1\" => 1}\n  actual:   %{\"c1\" => 2}"
+               ~s(  expected: %{"c1" => 1}\n  actual:   %{"c1" => 2}) <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "a long map mismatch lists only the differing entries" do
     states = Enum.map(clean(), &ToyAdapterCounts.with_counts/1)
 
     assert message(states, [:off_by_one], adapter: ToyAdapterCounts) ==
-             "#{@prefix} 1 (Inc), seed 7: key \"counts\":\n  \"c07\": expected 1, actual 2"
+             "#{@prefix} 1 (Inc), seed 7: " <>
+               ~s(key "counts":\n  "c07": expected 1, actual 2) <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "a long non-map mismatch keeps the whole values" do
@@ -270,28 +278,32 @@ defmodule AshQuint.ReplayTest do
 
     assert message(states) ==
              "#{@prefix} 1 (Inc), seed 7: key \"count\":\n" <>
-               "  expected: #{inspect(long)}\n  actual:   1"
+               "  expected: #{inspect(long)}\n  actual:   1" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "missing expected key" do
     assert message(clean(), [], adapter: ToyAdapterMissingKey) ==
-             "#{@prefix} 1 (Inc), seed 7: expected/2 returned no value for key \"count\""
+             "#{@prefix} 1 (Inc), seed 7: expected/2 returned no value for key \"count\"" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "extra projected key not in the model" do
     assert message(clean(), [:extra_key]) ==
-             "#{@prefix} 1 (Inc), seed 7: expected/2 returned no value for key \"ghost\""
+             "#{@prefix} 1 (Inc), seed 7: expected/2 returned no value for key \"ghost\"" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "failed invariants are all reported with the diff" do
     assert message([init(), inc(1, 1), reset()], [:negative]) ==
              "#{@prefix} 2 (Reset), seed 7: key \"count\":\n  expected: 0\n  actual:   -1\n" <>
-               "invariant non_negative: count is -1"
+               "invariant non_negative: count is -1" <> ~s(\nmodel step: Reset, result :accepted)
   end
 
   test "a raising invariant is reported" do
     assert message([init(), inc(1, 1)], [:invariant_raises]) ==
-             "#{@prefix} 1 (Inc), seed 7: invariant non_negative raised: invariant blew up"
+             "#{@prefix} 1 (Inc), seed 7: invariant non_negative raised: invariant blew up" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "pending then ok" do
@@ -302,19 +314,22 @@ defmodule AshQuint.ReplayTest do
   test "second pending is refused" do
     assert message([init(), begin(0, 1), begin(0, 2)]) ==
              "#{@prefix} 2 (Begin), seed 7: interleaved trace: two {:pending, …} steps " <>
-               "overlap; #{@use_start}"
+               "overlap; #{@use_start}" <>
+               ~s(\nmodel step: Begin %{"value" => 2}, result :accepted)
   end
 
   test "skip while pending is refused" do
     assert message([init(), begin(0, 1), peek(0)]) ==
              "#{@prefix} 2 (Peek), seed 7: interleaved trace: {:skip, …} while a " <>
-               "{:pending, …} step is open; #{@use_start}"
+               "{:pending, …} step is open; #{@use_start}" <>
+               ~s(\nmodel step: Peek, result :accepted)
   end
 
   test "trace ending pending is refused" do
     assert message([init(), begin(0, 1)]) ==
              "#{@prefix} 1 (Begin), seed 7: interleaved trace: the trace ends with this " <>
-               "{:pending, …} step open; #{@use_start}"
+               "{:pending, …} step open; #{@use_start}" <>
+               ~s(\nmodel step: Begin %{"value" => 1}, result :accepted)
   end
 
   describe "a step the model keeps in flight (Pending)" do
@@ -329,7 +344,8 @@ defmodule AshQuint.ReplayTest do
     test "refuses {:ok, …}" do
       assert message([init(), in_flight("Inc")]) ==
                "#{@prefix} 1 (Inc), seed 7: the model keeps Inc in flight (lastResult Pending), " <>
-                 "but step/2 returned {:ok, …}"
+                 "but step/2 returned {:ok, …}" <>
+                 ~s(\nmodel step: Inc %{"by" => 1, "op" => "o1"}, result :pending)
     end
 
     test "refuses {:skip, …}" do
@@ -356,13 +372,14 @@ defmodule AshQuint.ReplayTest do
     assert [%{index: 1, action: "Peek", kind: :skip}] = report.synced
 
     assert message([init(), peek(1)]) ==
-             "#{@prefix} 1 (Peek), seed 7: key \"count\":\n  expected: 1\n  actual:   0"
+             "#{@prefix} 1 (Peek), seed 7: key \"count\":\n  expected: 1\n  actual:   0" <>
+               ~s(\nmodel step: Peek, result :accepted)
   end
 
   test "missing step clause" do
     assert message(clean(), [], adapter: ToyAdapterNoReset) ==
              "#{@prefix} 4 (Reset), seed 7: adapter AshQuint.Test.ToyAdapterNoReset " <>
-               "has no step/2 clause for `Reset`"
+               "has no step/2 clause for `Reset`" <> ~s(\nmodel step: Reset, result :accepted)
   end
 
   test "other exceptions in step/2 propagate" do
@@ -377,14 +394,16 @@ defmodule AshQuint.ReplayTest do
     assert message(clean(), [:bad_return]) ==
              "#{@prefix} 1 (Inc), seed 7: step/2 returned :ok; " <>
                "expected {:ok, result, ctx}, {:pending, ctx}, {:skip, ctx}, " <>
-               "{:start, op, call, ctx}, {:advance, op, ctx} or {:complete, op, ctx}"
+               "{:start, op, call, ctx}, {:advance, op, ctx} or {:complete, op, ctx}" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "an {:error, _} return value is a bad return value" do
     assert message(clean(), [], adapter: ErrorReturn) ==
              "#{@prefix} 1 (Inc), seed 7: step/2 returned {:error, :boom}; " <>
                "expected {:ok, result, ctx}, {:pending, ctx}, {:skip, ctx}, " <>
-               "{:start, op, call, ctx}, {:advance, op, ctx} or {:complete, op, ctx}"
+               "{:start, op, call, ctx}, {:advance, op, ctx} or {:complete, op, ctx}" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "wrong initial action" do
@@ -448,7 +467,8 @@ defmodule AshQuint.ReplayTest do
     assert {:ok, %{synced: [_, _]}} = run([init(), inc(1, 1), reset()], [], adapter: NoUse)
 
     assert message([init(), peek(0)], [], adapter: NoUse) ==
-             "#{@prefix} 1 (Peek), seed 7: system call failed: :boom"
+             "#{@prefix} 1 (Peek), seed 7: system call failed: :boom" <>
+               ~s(\nmodel step: Peek, result :accepted)
   end
 
   test "the report keeps only the projected keys of expected/2" do
@@ -469,7 +489,8 @@ defmodule AshQuint.ReplayTest do
       end
 
     assert error.message ==
-             "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2"
+             "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "run! returns the report" do
@@ -482,12 +503,16 @@ defmodule AshQuint.ReplayTest do
 
     assert message ==
              "#{@prefix} 1 (Inc), seed 7: key \"count\":\n" <>
-               "  expected: {:ash_quint_mutated, \"count\"}\n  actual:   1"
+               "  expected: {:ash_quint_mutated, \"count\"}\n  actual:   1" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "drop mutation skips the system call" do
     assert {:error, %{index: 1, message: message}} = run(clean(), [], mutate: {:drop, 1})
-    assert message == "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   0"
+
+    assert message ==
+             "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   0" <>
+               ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
   end
 
   test "a dropped call closes the pending step it would have completed" do
@@ -495,7 +520,8 @@ defmodule AshQuint.ReplayTest do
              run([init(), begin(0, 2), commit(2)], [], mutate: {:drop, 2})
 
     assert message ==
-             "#{@prefix} 2 (Commit), seed 7: key \"count\":\n  expected: 2\n  actual:   0"
+             "#{@prefix} 2 (Commit), seed 7: key \"count\":\n  expected: 2\n  actual:   0" <>
+               ~s(\nmodel step: Commit, result :accepted)
   end
 
   test "a dropped call reports the step as skipped" do
@@ -568,7 +594,10 @@ defmodule AshQuint.ReplayTest do
       assert {%{steps: 1, count: 1}, {:error, failure}} = assert_finished_once()
 
       assert %{index: 2, action: "Inc"} = failure
-      assert failure.message == "#{@prefix} 2 (Inc), seed 7: step/2 raised: step blew up"
+
+      assert failure.message ==
+               "#{@prefix} 2 (Inc), seed 7: step/2 raised: step blew up" <>
+                 ~s(\nmodel step: Inc %{"by" => 2}, result :accepted)
     end
 
     test "is called with the step's ctx before an exception in project/1 propagates" do
@@ -577,20 +606,29 @@ defmodule AshQuint.ReplayTest do
       end
 
       assert {%{steps: 2, count: 3}, {:error, failure}} = assert_finished_once()
-      assert failure.message == "#{@prefix} 2 (Inc), seed 7: project/1 raised: no connection"
+
+      assert failure.message ==
+               "#{@prefix} 2 (Inc), seed 7: project/1 raised: no connection" <>
+                 ~s(\nmodel step: Inc %{"by" => 2}, result :accepted)
     end
 
     test "is called before a throw propagates" do
       assert catch_throw(finishing(clean(), raise: {:throw, 1})) == :thrown
       assert {_ctx, {:error, failure}} = assert_finished_once()
-      assert failure.message == "#{@prefix} 1 (Inc), seed 7: step/2 threw :thrown"
+
+      assert failure.message ==
+               "#{@prefix} 1 (Inc), seed 7: step/2 threw :thrown" <>
+                 ~s(\nmodel step: Inc %{"by" => 1}, result :accepted)
     end
 
     test "an {:error, message} fails a passing replay at the last step" do
       assert {:error, %{index: 4, action: "Reset", message: message}} =
                finishing(clean(), finish: {:error, "witness not reached"})
 
-      assert message == "#{@prefix} 4 (Reset), seed 7: finish/2: witness not reached"
+      assert message ==
+               "#{@prefix} 4 (Reset), seed 7: finish/2: witness not reached" <>
+                 ~s(\nmodel step: Reset, result :accepted)
+
       assert {_ctx, :ok} = assert_finished_once()
 
       assert {:error, %{index: 0, action: "Init"}} =
@@ -602,7 +640,7 @@ defmodule AshQuint.ReplayTest do
 
       assert message ==
                "#{@prefix} 4 (Reset), seed 7: finish/2 returned :done; " <>
-                 "expected :ok or {:error, message}"
+                 "expected :ok or {:error, message}" <> ~s(\nmodel step: Reset, result :accepted)
     end
 
     test "on a failing replay, the original failure is kept" do
@@ -627,6 +665,56 @@ defmodule AshQuint.ReplayTest do
       end
 
       assert {_ctx, {:error, _failure}} = assert_finished_once()
+    end
+  end
+
+  describe "the model step line" do
+    test "a failure ends with the model step line" do
+      assert message(clean(), [:off_by_one]) ==
+               "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2\n" <>
+                 ~s(model step: Inc %{"by" => 1}, result :accepted)
+    end
+
+    test "the model step line omits empty picks" do
+      assert message([init(), peek(1)]) ==
+               "#{@prefix} 1 (Peek), seed 7: key \"count\":\n  expected: 1\n  actual:   0\n" <>
+                 "model step: Peek, result :accepted"
+    end
+
+    test "the model step line omits a missing result" do
+      assert message(clean(), [:off_by_one], results: false) ==
+               "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2\n" <>
+                 ~s(model step: Inc %{"by" => 1})
+    end
+
+    test "the model step line shows a rejection" do
+      assert message(clean(), [:wrong_code]) ==
+               "#{@prefix} 3 (Inc), seed 7: " <>
+                 ~s(outcome: expected {:rejected, "too_big"}, got {:rejected, "other"}\n) <>
+                 ~s(model step: Inc %{"by" => 1}, result {:rejected, "too_big"})
+    end
+
+    test "a failure at step 0 has no model step line" do
+      assert {:error, %{index: 0, message: message}} =
+               Replay.run(RaisingProject, trace(clean()),
+                 model: :counter,
+                 adapter_opts: [raise: :project],
+                 context: ["trace: a"]
+               )
+
+      assert message == "#{@prefix} 0 (Init), seed 7: project/1 raised: no connection\ntrace: a"
+    end
+
+    test "context lines come last" do
+      assert message(clean(), [:off_by_one], context: ["trace: a", "quint: b"]) ==
+               "#{@prefix} 1 (Inc), seed 7: key \"count\":\n  expected: 1\n  actual:   2\n" <>
+                 ~s(model step: Inc %{"by" => 1}, result :accepted\n) <>
+                 "trace: a\nquint: b"
+    end
+
+    test "no context by default" do
+      lines = String.split(message(clean(), [:off_by_one]), "\n")
+      assert List.last(lines) == ~s(model step: Inc %{"by" => 1}, result :accepted)
     end
   end
 end

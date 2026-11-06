@@ -33,8 +33,8 @@ defmodule AshQuint.Replay do
        in flight passes, and the ops are cancelled unchecked.
 
   See the README's "Concurrent calls" for the op tasks, gates and
-  timeouts. A failure with ops in flight ends with an `in flight:` line and
-  lists them in its `:in_flight` field.
+  timeouts. A failure with ops in flight ends its problems with an
+  `in flight:` line and lists them in its `:in_flight` field.
 
   Once `init/2` has returned, the replay ends with the adapter's
   `finish/2`, when it defines one, called exactly once with the latest `ctx`
@@ -47,7 +47,14 @@ defmodule AshQuint.Replay do
   the last step; on a failing replay its return value is ignored.
 
   Every failure message starts with
-  `<model> <source> <name>, step <index> (<action>), seed <seed>: `.
+  `<model> <source> <name>, step <index> (<action>), seed <seed>: `, then
+  lists every problem, one per line. Then, except at step 0, comes the
+  model's step, its picks omitted when empty and its result when the trace
+  has none:
+
+      model step: Inc %{"by" => 2, "ctr" => "c1"}, result :accepted
+
+  and last the lines of the `:context` option.
   """
 
   @compile {:no_warn_undefined, AshQuint.Gate.Telemetry}
@@ -83,6 +90,7 @@ defmodule AshQuint.Replay do
           | {:step_timeout, non_neg_integer()}
           | {:complete_timeout, non_neg_integer()}
           | {:gate_timeout, non_neg_integer()}
+          | {:context, [String.t()]}
 
   @type synced :: %{
           index: pos_integer(),
@@ -159,6 +167,8 @@ defmodule AshQuint.Replay do
       (ms). Default `5_000`.
     * `:gate_timeout` — how long an op is held at a gate before the gate
       returns anyway and the replay fails (ms). Default `5_000`.
+    * `:context` — lines that end every failure message, after the model
+      step line (for instance the trace's path). Default `[]`.
   """
   @spec run(module(), Trace.t(), [option()]) :: {:ok, report()} | {:error, failure()}
   def run(adapter, %Trace{} = trace, opts \\ []) do
@@ -169,6 +179,7 @@ defmodule AshQuint.Replay do
       step_opts: Keyword.take(opts, [:action_path, :result_path, :pending_result, :op_field]),
       init_action: Keyword.get(opts, :init_action, "Init"),
       mutate: Keyword.get(opts, :mutate),
+      context: Keyword.get(opts, :context, []),
       ref: make_ref(),
       timeouts: %{
         settle: Keyword.get(opts, :settle_timeout, 500),
@@ -827,6 +838,24 @@ defmodule AshQuint.Replay do
     prefix =
       "#{run.model} #{Trace.label(trace)}, step #{index} (#{action}), seed #{trace.seed}: "
 
+    lines = lines ++ model_step_lines(run, index) ++ run.context
     {:error, %{index: index, action: action, message: prefix <> Enum.join(lines, "\n")}}
+  end
+
+  defp model_step_lines(_run, 0), do: []
+
+  defp model_step_lines(run, index) do
+    with state when is_map(state) <- Enum.at(run.trace.states, index),
+         {:ok, step} <- Step.from_state(state, index, run.step_opts) do
+      [model_step_line(step)]
+    else
+      _no_step -> []
+    end
+  end
+
+  defp model_step_line(%Step{action_taken: action, nondet_picks: picks, result: result}) do
+    picks = if picks == %{}, do: "", else: " " <> inspect(picks)
+    result = if result == nil, do: "", else: ", result " <> inspect(result)
+    "model step: " <> action <> picks <> result
   end
 end

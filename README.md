@@ -772,12 +772,32 @@ file fails it.
 
 ### Failures
 
-Every replay failure names the trace, step, action and seed, and then lists
-all of that step's problems:
+Every replay failure names the trace, step, action and seed, lists all of
+that step's problems, and ends with the model's step (its picks and
+result, as the trace has them) and, in `AshQuint.Case`'s tests, the trace
+file:
 
 ```
 counter random 3, step 4 (Inc), seed 20261102: outcome: expected :accepted, got {:rejected, "over_limit"}
+model step: Inc %{"by" => 2, "ctr" => "c1"}, result :accepted
+trace: priv/examples/counter/traces/random_3.itf.json
 ```
+
+The prefix up to the first problem stays this shape:
+`<model> <source> <name>, step <i> (<action>), seed <seed>: `. The
+`model step:` line leaves out empty picks and a missing result, and a
+failure at step 0 has none. A regression trace with provenance (see
+"Regression traces") adds the command that regenerates it, after its
+`trace:` line:
+
+```
+quint: npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --out-itf=explore_{seq}.itf.json (trace 2)
+```
+
+`(trace 2)` is the trace's place among the run's outputs
+(`explore_2.itf.json`). Words with characters outside
+`[A-Za-z0-9_./=:@{},+-]` are single-quoted. `AshQuint.Replay.run/3`
+appends its own lines with the `:context` option.
 
 The problems are an outcome mismatch, a failed system call
 (`{:failed, message}`), a missing `step/2` clause, a bad return value, a
@@ -831,8 +851,9 @@ step 4 (Reset) blocked for 2000ms while "o1" was held at gate :after_read
 gate :after_read of op "o1" was not released within 5000ms
 ```
 
-A failure with ops in flight ends with an `in flight:` line, and the
-failure map's `in_flight` lists them (`%{op, started_at, at_gate}`).
+A failure with ops in flight ends its problems with an `in flight:` line
+(before the `model step:` line), and the failure map's `in_flight` lists
+them (`%{op, started_at, at_gate}`).
 
 ## Sensitivity
 
@@ -982,14 +1003,16 @@ passing session prints one line:
 explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped
 ```
 
-A trace is named `"<seed>_<index>"`, so its failure message is the one
-its regression test will print. A replay failing at step N is cut to its
+A trace is named `"<seed>_<index>"`, so its failure message is the start
+of the one its regression test will print (which adds the `trace:` and
+`quint:` lines). A replay failing at step N is cut to its
 states 0..N and replayed once more: when it fails at N again, the cut
 trace is the candidate; otherwise (a race window without a gate, say) the
 full trace is. An exception from the adapter is a failure too, with the
 full trace. The candidate gets its provenance in `#meta.ash_quint` and is
 written to `_build/<env>/ash_quint/explore/<model>/`, and the test fails
-listing each one with the command that commits it:
+listing each one with the command that regenerates its trace and the
+one that commits it:
 
 ```text
 explore counter: 1 failure in 100 traces (seeds 4031..4035)
@@ -997,7 +1020,9 @@ explore counter: 1 failure in 100 traces (seeds 4031..4035)
 counter regression 4031_2, step 5 (Inc), seed 4031: key "counts":
   expected: %{"c1" => 3}
   actual:   %{"c1" => 4}
+model step: Inc %{"by" => 1, "ctr" => "c1"}, result :accepted
 candidate: _build/test/ash_quint/explore/counter/regression_4031_2.itf.json (cut to 5 steps)
+quint:     npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --out-itf=explore_{seq}.itf.json (trace 2)
 promote:   MIX_ENV=test mix ash_quint.promote _build/test/ash_quint/explore/counter/regression_4031_2.itf.json
 ```
 

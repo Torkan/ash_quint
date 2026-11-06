@@ -65,7 +65,8 @@ defmodule AshQuint.ReplayConcurrentTest do
 
       assert failure.message ==
                "#{@prefix} 4 (IncDone), seed 7: op \"o1\" (started at step 1): " <>
-                 "outcome: expected {:rejected, \"too_big\"}, got :accepted"
+                 "outcome: expected {:rejected, \"too_big\"}, got :accepted" <>
+                 ~s(\nmodel step: IncDone %{"op" => "o1"}, result {:rejected, "too_big"})
     end
 
     test "state is compared at start steps" do
@@ -91,22 +92,26 @@ defmodule AshQuint.ReplayConcurrentTest do
     test "a Pending step returning {:ok, …}, {:skip, …} or {:complete, …} is refused" do
       assert message([init(), with_result("Inc", @pending)]) ==
                "#{@prefix} 1 (Inc), seed 7: the model keeps Inc in flight " <>
-                 "(lastResult Pending), but step/2 returned {:ok, …}"
+                 "(lastResult Pending), but step/2 returned {:ok, …}" <>
+                 ~s(\nmodel step: Inc %{"by" => 1, "op" => "o1"}, result :pending)
 
       assert message([init(), with_result("Peek", @pending)]) ==
                "#{@prefix} 1 (Peek), seed 7: the model keeps Peek in flight " <>
-                 "(lastResult Pending), but step/2 returned {:skip, …}"
+                 "(lastResult Pending), but step/2 returned {:skip, …}" <>
+                 ~s(\nmodel step: Peek %{"by" => 1, "op" => "o1"}, result :pending)
 
       assert message([init(), inc_start(0, "o1", 1), with_result("IncDone", @pending)]) ==
                "#{@prefix} 2 (IncDone), seed 7: the model keeps IncDone in flight " <>
                  "(lastResult Pending), but step/2 returned {:complete, \"o1\", …}\n" <>
-                 "in flight: \"o1\" at gate :requested (since step 1)"
+                 "in flight: \"o1\" at gate :requested (since step 1)" <>
+                 ~s(\nmodel step: IncDone %{"by" => 1, "op" => "o1"}, result :pending)
     end
 
     test "a step that isn't Pending returning {:start, …} is refused" do
       assert message([init(), with_result("IncStart", @accepted)]) ==
                "#{@prefix} 1 (IncStart), seed 7: the model completes IncStart here, " <>
-                 "but step/2 returned {:start, \"o1\", …}"
+                 "but step/2 returned {:start, \"o1\", …}" <>
+                 ~s(\nmodel step: IncStart %{"by" => 1, "op" => "o1"}, result :accepted)
     end
 
     test "complete of an op not in flight lists the ops in flight" do
@@ -114,17 +119,29 @@ defmodule AshQuint.ReplayConcurrentTest do
 
       assert message(states) ==
                "#{@prefix} 3 (IncDone), seed 7: complete of op \"o3\", which isn't in flight; " <>
-                 "in flight: \"o1\", \"o2\""
+                 ~s(in flight: "o1", "o2") <>
+                 ~s(\nmodel step: IncDone %{"op" => "o3"}, result :accepted)
 
       assert message([init(), inc_done(1, "o3")]) ==
                "#{@prefix} 1 (IncDone), seed 7: complete of op \"o3\", which isn't in flight; " <>
-                 "no op is in flight"
+                 "no op is in flight" <>
+                 ~s(\nmodel step: IncDone %{"op" => "o3"}, result :accepted)
     end
 
     test "starting an op already in flight is refused" do
       assert message([init(), inc_start(0, "o1", 1), inc_start(0, "o1", 1)]) ==
                "#{@prefix} 2 (IncStart), seed 7: op \"o1\" was started at step 1 and is " <>
-                 "started again\nin flight: \"o1\" at gate :requested (since step 1)"
+                 "started again\nin flight: \"o1\" at gate :requested (since step 1)" <>
+                 ~s(\nmodel step: IncStart %{"by" => 1, "op" => "o1"}, result :pending)
+    end
+
+    test "the model step line follows the in flight line" do
+      lines = String.split(message([init(), inc_start(0, "o1", 1), inc_start(0, "o1", 1)]), "\n")
+
+      assert Enum.take(lines, -2) == [
+               "in flight: \"o1\" at gate :requested (since step 1)",
+               ~s(model step: IncStart %{"by" => 1, "op" => "o1"}, result :pending)
+             ]
     end
 
     test "a trace without lastResult: only the not-in-flight row applies" do
@@ -148,7 +165,8 @@ defmodule AshQuint.ReplayConcurrentTest do
       assert message(states, faults: [:no_gate]) ==
                "#{@prefix} 1 (IncStart), seed 7: op \"o1\" finished before reaching a gate; " <>
                  "the model keeps it in flight until step 3\n" <>
-                 "in flight: \"o1\" finished (since step 1)"
+                 "in flight: \"o1\" finished (since step 1)" <>
+                 ~s(\nmodel step: IncStart %{"by" => 1, "op" => "o1"}, result :pending)
 
       assert message(Enum.take(states, 3), faults: [:no_gate]) =~
                "the model keeps it in flight until a later step"
@@ -162,7 +180,8 @@ defmodule AshQuint.ReplayConcurrentTest do
 
       assert message([init(), inc_start(1, "o1", 1), inc_done(1, "o1", {:rejected, "x"})], opts) ==
                "#{@prefix} 2 (IncDone), seed 7: op \"o1\" (started at step 1): " <>
-                 "outcome: expected {:rejected, \"x\"}, got :accepted"
+                 "outcome: expected {:rejected, \"x\"}, got :accepted" <>
+                 ~s(\nmodel step: IncDone %{"op" => "o1"}, result {:rejected, "x"})
     end
 
     test "a raising op fails at the step that observes it" do
@@ -217,7 +236,8 @@ defmodule AshQuint.ReplayConcurrentTest do
 
       assert message(states, start_opts: %{"o1" => [early: true]}) ==
                "#{@prefix} 1 (IncStart), seed 7: step/2 returned {:start, \"o1\", …} with " <>
-                 "options [early: true]; expected early: :ok, may_block: boolean() and at: a gate name"
+                 "options [early: true]; expected early: :ok, may_block: boolean() and at: a gate name" <>
+                 ~s(\nmodel step: IncStart %{"by" => 1, "op" => "o1"}, result :pending)
 
       opts = [faults: [:two_gates], advance_opts: %{"o1" => [early: :ok]}]
 
@@ -229,7 +249,8 @@ defmodule AshQuint.ReplayConcurrentTest do
     test "advance must agree with the model and name an op in flight" do
       assert message([init(), inc_advance(0, "o1")]) ==
                "#{@prefix} 1 (IncRead), seed 7: advance of op \"o1\", which isn't in flight; " <>
-                 "no op is in flight"
+                 "no op is in flight" <>
+                 ~s(\nmodel step: IncRead %{"op" => "o1"}, result :pending)
 
       read = %{inc_advance(0, "o1") | "lastResult" => {:variant, "Accepted", {}}}
 
@@ -256,7 +277,8 @@ defmodule AshQuint.ReplayConcurrentTest do
     test "an op that neither gates nor finishes fails" do
       assert message(locked(), [faults: [:locking]], @settle) ==
                "#{@prefix} 2 (IncStart), seed 7: op \"o2\" did not settle within 50ms; " <>
-                 "in flight: \"o1\" at gate :after_read (since step 1)"
+                 "in flight: \"o1\" at gate :after_read (since step 1)" <>
+                 ~s(\nmodel step: IncStart %{"by" => 1, "op" => "o2"}, result :pending)
     end
 
     test "with may_block: true it counts as blocked and the replay continues" do
@@ -295,7 +317,8 @@ defmodule AshQuint.ReplayConcurrentTest do
       assert_received {:toy_finish, {:error, failure}, alive}
 
       assert failure.message ==
-               "#{@prefix} 2 (IncStart), seed 7: blocked?/2 raised: blocked? blew up"
+               "#{@prefix} 2 (IncStart), seed 7: blocked?/2 raised: blocked? blew up" <>
+                 ~s(\nmodel step: IncStart %{"by" => 1, "op" => "o2"}, result :pending)
 
       assert alive == [false, false]
     end
@@ -425,7 +448,8 @@ defmodule AshQuint.ReplayConcurrentTest do
       assert {:error, failure} = run(states, [test: self()], mutate: {:drop, 1})
 
       assert failure.message ==
-               "#{@prefix} 2 (IncDone), seed 7: key \"count\":\n  expected: 2\n  actual:   0"
+               "#{@prefix} 2 (IncDone), seed 7: key \"count\":\n  expected: 2\n  actual:   0" <>
+                 ~s(\nmodel step: IncDone %{"op" => "o1"}, result :accepted)
 
       refute Map.has_key?(failure, :in_flight)
       assert_received {:toy_finish, {:error, %{index: 2}}, []}
@@ -466,7 +490,8 @@ defmodule AshQuint.ReplayConcurrentTest do
 
       assert failure.message ==
                "#{@prefix} 2 (IncDone), seed 7: key \"count\":\n  expected: 2\n  actual:   0\n" <>
-                 "in flight: \"o1\" at gate :requested (since step 1)"
+                 "in flight: \"o1\" at gate :requested (since step 1)" <>
+                 ~s(\nmodel step: IncDone %{"op" => "o1"}, result :accepted)
 
       assert failure.in_flight == [%{op: "o1", started_at: 1, at_gate: :requested}]
       assert_received {:toy_finish, {:error, %{index: 2}}, [false]}
@@ -494,7 +519,8 @@ defmodule AshQuint.ReplayConcurrentTest do
 
       assert failure.message ==
                "#{@prefix} 3 (IncDone), seed 7: op \"o1\" (started at step 1): " <>
-                 "outcome: expected :accepted, got {:rejected, \"too_big\"}"
+                 "outcome: expected :accepted, got {:rejected, \"too_big\"}" <>
+                 ~s(\nmodel step: IncDone %{"op" => "o1"}, result :accepted)
     end
 
     test "only the op started at the index is serialized" do

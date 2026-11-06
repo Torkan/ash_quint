@@ -913,6 +913,46 @@ defmodule AshQuint.GenTest do
     end
   end
 
+  describe "quint_line/2" do
+    @args [
+      "run",
+      "priv/examples/counter/model.qnt",
+      "--main=counter",
+      "--seed=4031",
+      "--max-steps=10",
+      "--backend=rust"
+    ]
+
+    test "quint_line/2 builds a paste-ready command", %{tmp_dir: tmp_dir} do
+      assert Gen.quint_line(config(tmp_dir), %{"args" => @args, "index" => 2}) ==
+               "npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt " <>
+                 "--main=counter --seed=4031 --max-steps=10 --backend=rust " <>
+                 "--out-itf=explore_{seq}.itf.json (trace 2)"
+    end
+
+    test "quint_line/2 quotes words with other characters", %{tmp_dir: tmp_dir} do
+      args = ["run", "--invariant=not(witA)", "a b", "it's", "--x=a+b@c:d,{e}"]
+
+      assert Gen.quint_line(config(tmp_dir), %{"args" => args, "index" => 0}) ==
+               "npx --yes @informalsystems/quint@0.33.1 run '--invariant=not(witA)' 'a b' " <>
+                 "'it'\\''s' --x=a+b@c:d,{e} --out-itf=explore_{seq}.itf.json (trace 0)"
+    end
+
+    test "quint_line/2 without args is nil", %{tmp_dir: tmp_dir} do
+      assert Gen.quint_line(config(tmp_dir), %{"index" => 1}) == nil
+    end
+
+    test "quint_line/2 with malformed args or index is nil", %{tmp_dir: tmp_dir} do
+      config = config(tmp_dir)
+
+      assert Gen.quint_line(config, %{"args" => @args}) == nil
+      assert Gen.quint_line(config, %{"args" => "run", "index" => 1}) == nil
+      assert Gen.quint_line(config, %{"args" => ["run", 1], "index" => 1}) == nil
+      assert Gen.quint_line(config, %{"args" => @args, "index" => "1"}) == nil
+      assert Gen.quint_line(config, %{"args" => @args, "index" => -1}) == nil
+    end
+  end
+
   describe "regression traces" do
     setup :setup_root
 
