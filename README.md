@@ -791,7 +791,7 @@ failure at step 0 has none. A regression trace with provenance (see
 `trace:` line:
 
 ```
-quint: npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --out-itf=explore_{seq}.itf.json (trace 2)
+quint: npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --witnesses witOverLimit witResetAfterInc --out-itf=explore_{seq}.itf.json (trace 2)
 ```
 
 `(trace 2)` is the trace's place among the run's outputs
@@ -997,11 +997,23 @@ replayed in the test process, with the module's adapter, `adapter_opts`,
 `replay:` and `traces:` selection: a fresh trace the selection leaves out
 (by the same rule as the manifest's `concurrent`) is counted as skipped.
 All replays share the test's sandbox, as the sensitivity check's do. A
-passing session prints one line:
+passing session prints one line, and a second when the model's
+`witnesses:` have the same `main` as `random:`:
 
 ```
 explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped
+witnesses: witOverLimit 35/100 (35.0%), witResetAfterInc 100/100 (100.0%)
 ```
+
+Each batch then ends with `--witnesses <names…>`, and Quint counts, per
+witness, the fresh traces in which it holds in some state; the line sums
+them over the batches. A witness with 0 hits reads `0/100 (never)`: the
+fresh traces never reach that scenario, so they never test it (raise
+`max_steps`, or make a step favour it). When a batch's output lacks a
+witness's count, the line reads
+`witnesses: counts not found in Quint's output`. Witnesses of another
+module get no rates. The summary line is printed even when the session
+fails.
 
 A trace is named `"<seed>_<index>"`, so its failure message is the start
 of the one its regression test will print (which adds the `trace:` and
@@ -1022,7 +1034,7 @@ counter regression 4031_2, step 5 (Inc), seed 4031: key "counts":
   actual:   %{"c1" => 4}
 model step: Inc %{"by" => 1, "ctr" => "c1"}, result :accepted
 candidate: _build/test/ash_quint/explore/counter/regression_4031_2.itf.json (cut to 5 steps)
-quint:     npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --out-itf=explore_{seq}.itf.json (trace 2)
+quint:     npx --yes @informalsystems/quint@0.33.1 run priv/examples/counter/model.qnt --main=counter --seed=4031 --max-steps=10 --max-samples=20 --n-traces=20 --backend=rust --witnesses witOverLimit witResetAfterInc --out-itf=explore_{seq}.itf.json (trace 2)
 promote:   MIX_ENV=test mix ash_quint.promote _build/test/ash_quint/explore/counter/regression_4031_2.itf.json
 ```
 

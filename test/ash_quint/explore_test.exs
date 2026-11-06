@@ -47,8 +47,9 @@ defmodule AshQuint.ExploreTest do
   end
 
   # A runner that writes the fixture traces matching `glob`, cyclically, as
-  # the batch's explore_<i>.itf.json files, and sends its args to the test.
-  defp runner(glob \\ @ok_traces) do
+  # the batch's explore_<i>.itf.json files, sends its args to the test and
+  # prints `output`.
+  defp runner(glob \\ @ok_traces, output \\ "") do
     fixtures = glob |> Path.wildcard() |> Enum.sort()
     test = self()
 
@@ -65,9 +66,34 @@ defmodule AshQuint.ExploreTest do
         File.cp!(fixture, String.replace(out, "{seq}", Integer.to_string(i)))
       end)
 
-      {"", 0}
+      {output, 0}
     end
   end
+
+  # A config in `tmp_dir` with the ok fixture model and `witnesses`.
+  defp witness_config(tmp_dir, witnesses) do
+    config = Path.join(tmp_dir, "ash_quint.exs")
+
+    File.write!(config, """
+    [
+      quint: "0.33.1",
+      models: [
+        ok: [
+          model: "test/fixtures/case/ok/model.qnt",
+          out: "test/fixtures/case/ok",
+          seed: 7,
+          random: [main: "toy", max_steps: 3],
+          witnesses: #{inspect(witnesses)}
+        ]
+      ]
+    ]
+    """)
+
+    config
+  end
+
+  defp witnessed(tmp_dir),
+    do: [config: witness_config(tmp_dir, main: "toy", names: ~w(witA witB))]
 
   defp settings(overrides \\ []) do
     Map.merge(%{runs: 5, seed: 10, budget: nil, failures: 1}, Map.new(overrides))
@@ -153,8 +179,85 @@ defmodule AshQuint.ExploreTest do
                skipped: 0,
                seeds: 10..12,
                failures: [],
-               error: nil
+               error: nil,
+               witnesses: []
              }
+    end
+
+    test "witness rates are parsed and summed over batches", %{tmp_dir: tmp_dir} do
+      output = """
+      [ok] No violation found (10ms at 300 traces/second).
+      Witnesses:
+      witA was witnessed in 1 trace(s) out of 2 explored (50.00%)
+      witB was witnessed in 0 trace(s) out of 2 explored (0.00%)
+      """
+
+      report =
+        run(settings(runs: 4), witnessed(tmp_dir), tmp_dir, runner: runner(@ok_traces, output))
+
+      assert report.witnesses == [
+               %{name: "witA", hits: 2, traces: 4},
+               %{name: "witB", hits: 0, traces: 4}
+             ]
+    end
+
+    test "--witnesses comes last with every name", %{tmp_dir: tmp_dir} do
+      run(settings(runs: 4), witnessed(tmp_dir), tmp_dir)
+
+      for args <- quint_args() do
+        assert Enum.take(args, -3) == ["--witnesses", "witA", "witB"]
+      end
+    end
+
+    test "no --witnesses when the witness main differs", %{tmp_dir: tmp_dir} do
+      report =
+        run(
+          settings(runs: 2),
+          [config: witness_config(tmp_dir, main: "other", names: ~w(witA witB))],
+          tmp_dir
+        )
+
+      assert [args] = quint_args()
+      refute "--witnesses" in args
+      assert report.witnesses == []
+    end
+
+    test "no --witnesses without witnesses", %{tmp_dir: tmp_dir} do
+      report = run(settings(runs: 2), [], tmp_dir)
+
+      assert [args] = quint_args()
+      refute "--witnesses" in args
+      assert report.witnesses == []
+    end
+
+    test "missing counts make the rates unknown", %{tmp_dir: tmp_dir} do
+      output = "witA was witnessed in 1 trace(s) out of 2 explored (50.00%)\n"
+
+      report =
+        run(settings(runs: 4), witnessed(tmp_dir), tmp_dir, runner: runner(@ok_traces, output))
+
+      assert report.witnesses == :unknown
+      assert %{generated: 4, replayed: 4, failures: [], error: nil} = report
+    end
+
+    test "a batch missing a count keeps the rates unknown", %{tmp_dir: tmp_dir} do
+      # The first batch lacks witB's line, the second has both.
+      full = """
+      witA was witnessed in 1 trace(s) out of 2 explored (50.00%)
+      witB was witnessed in 2 trace(s) out of 2 explored (100.00%)
+      """
+
+      partial = "witA was witnessed in 1 trace(s) out of 2 explored (50.00%)\n"
+      {:ok, outputs} = Agent.start_link(fn -> [partial, full] end)
+      write = runner()
+
+      runner = fn exe, args, opts ->
+        write.(exe, args, opts)
+        {Agent.get_and_update(outputs, fn [output | rest] -> {output, rest} end), 0}
+      end
+
+      report = run(settings(runs: 4), witnessed(tmp_dir), tmp_dir, runner: runner)
+      assert report.witnesses == :unknown
     end
 
     test "max_steps: overrides the model's", %{tmp_dir: tmp_dir} do
@@ -582,7 +685,8 @@ defmodule AshQuint.ExploreTest do
         skipped: 2,
         seeds: 4031..4035,
         failures: [],
-        error: nil
+        error: nil,
+        witnesses: []
       }
 
       assert Explore.format(:counter, report) ==
@@ -590,6 +694,76 @@ defmodule AshQuint.ExploreTest do
 
       assert Explore.format(:counter, %{report | generated: 1, seeds: 4031..4031}) ==
                "explore counter: 1 trace (seeds 4031..4031), 0 failures, 2 skipped"
+    end
+
+    @passing %{
+      generated: 100,
+      replayed: 100,
+      skipped: 0,
+      seeds: 4031..4035,
+      failures: [],
+      error: nil,
+      witnesses: []
+    }
+
+    test "format/2 prints witness rates" do
+      report = %{
+        @passing
+        | witnesses: [
+            %{name: "witOverLimit", hits: 35, traces: 100},
+            %{name: "witResetAfterInc", hits: 100, traces: 100}
+          ]
+      }
+
+      assert Explore.format(:counter, report) ==
+               "explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped\n" <>
+                 "witnesses: witOverLimit 35/100 (35.0%), witResetAfterInc 100/100 (100.0%)"
+    end
+
+    test "a witness never hit says never" do
+      report = %{@passing | witnesses: [%{name: "witA", hits: 0, traces: 100}]}
+
+      assert Explore.format(:counter, report) ==
+               "explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped\n" <>
+                 "witnesses: witA 0/100 (never)"
+    end
+
+    test "unknown counts" do
+      assert Explore.format(:counter, %{@passing | witnesses: :unknown}) ==
+               "explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped\n" <>
+                 "witnesses: counts not found in Quint's output"
+    end
+
+    test "no witnesses line without witnesses" do
+      assert Explore.format(:counter, @passing) ==
+               "explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped"
+    end
+
+    test "no witnesses line before the first batch" do
+      report = %{
+        @passing
+        | generated: 0,
+          seeds: 4031..4031,
+          witnesses: [%{name: "witA", hits: 0, traces: 0}],
+          error: "quint run for :counter explore failed:\nboom"
+      }
+
+      assert Explore.format(:counter, report) ==
+               "explore counter: 0 traces (seeds 4031..4031), 0 failures, 0 skipped\n\n" <>
+                 "quint run for :counter explore failed:\nboom"
+    end
+
+    test "the witnesses line comes before an error" do
+      report = %{
+        @passing
+        | witnesses: [%{name: "witA", hits: 1, traces: 3}],
+          error: "quint run for :counter explore failed:\nboom"
+      }
+
+      assert Explore.format(:counter, report) ==
+               "explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped\n" <>
+                 "witnesses: witA 1/3 (33.3%)\n\n" <>
+                 "quint run for :counter explore failed:\nboom"
     end
 
     test "a report with failures and an error" do
@@ -618,7 +792,8 @@ defmodule AshQuint.ExploreTest do
           failure.(3, nil, false),
           failure.(4, nil, nil)
         ],
-        error: "quint run for :counter explore failed:\nboom"
+        error: "quint run for :counter explore failed:\nboom",
+        witnesses: []
       }
 
       path = "_build/test/ash_quint/explore/counter/regression_4031_"
@@ -679,6 +854,22 @@ defmodule AshQuint.ExploreTest do
       assert report.seeds == 1..2
     end
 
+    test "a counter session reports witness rates", %{tmp_dir: tmp_dir} do
+      report =
+        quint_run([model: :counter, adapter: CounterAdapter], %{runs: 40, seed: 1}, tmp_dir)
+
+      assert [
+               %{name: "witOverLimit", hits: over, traces: 40},
+               %{name: "witResetAfterInc", hits: reset, traces: 40}
+             ] = report.witnesses
+
+      assert over in 0..40
+      assert reset in 0..40
+
+      assert [_summary, "witnesses: witOverLimit " <> _rest] =
+               String.split(Explore.format(:counter, report), "\n")
+    end
+
     test "an off-by-one adapter fails and its candidate promotes", %{tmp_dir: tmp_dir} do
       report =
         quint_run(
@@ -735,7 +926,9 @@ defmodule AshQuint.ExploreTest do
                  "\ntrace: priv/examples/counter/traces/regression_#{name}.itf.json" <>
                  "\nquint: " <> failure.quint
 
-      assert failure.quint =~ " --backend=rust --out-itf=explore_{seq}.itf.json (trace "
+      assert failure.quint =~
+               " --backend=rust --witnesses witOverLimit witResetAfterInc " <>
+                 "--out-itf=explore_{seq}.itf.json (trace "
     end
 
     test "race with the read-modify-write action finds the lost update", %{tmp_dir: tmp_dir} do

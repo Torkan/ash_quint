@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Witness hit rates: when a model's `witnesses:` have the same `main` as
+  `random:`, explore adds `--witnesses <names…>` to each batch and sums
+  Quint's per-witness counts; the report gains `witnesses`
+  (`[%{name, hits, traces}]`, `[]` without witnesses, `:unknown` when a
+  batch's output lacks a count), and the summary gains a line
+  `witnesses: witOverLimit 35/100 (35.0%), witResetAfterInc 100/100 (100.0%)`
+  (`0/100 (never)` for a witness never hit). The flag is kept in the
+  candidate's provenance `args`, so its `quint:` line includes it.
 - Reproduction lines: every replay failure message now ends, after its
   problems (and the `in flight:` line), with
   `model step: <action>[ <picks>][, result <result>]` (none at step 0),

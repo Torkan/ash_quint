@@ -20,7 +20,12 @@ defmodule AshQuint.Explore do
   model's `random:` source (`AshQuint.Gen.random_args/3`) with seed
   `seed + k`, `--n-traces` and `--max-samples` both the batch size (the
   `batch` option, default 20, or the runs left), and `--max-steps` the
-  `max_steps` option, else the model's. Each fresh trace is normalized
+  `max_steps` option, else the model's. When the model's `witnesses:` have
+  the same `main` as `random:`, each batch ends with
+  `--witnesses <names…>`, and the report's `witnesses` sums, per name,
+  the hits and traces Quint prints (`<name> was witnessed in <hits>
+  trace(s) out of <traces> explored`); a batch whose output lacks a
+  name's count makes them `:unknown`. Each fresh trace is normalized
   (`AshQuint.Gen.normalize/1`) and replayed with `AshQuint.Replay.run/3`
   in the calling process, named `"<seed>_<index>"` with source
   `:regression` and no `:context`, so its failure message is the start of
@@ -86,7 +91,14 @@ defmodule AshQuint.Explore do
           skipped: non_neg_integer(),
           seeds: Range.t(),
           failures: [failure()],
-          error: String.t() | nil
+          error: String.t() | nil,
+          witnesses: [witness_rate()] | :unknown
+        }
+
+  @type witness_rate :: %{
+          name: String.t(),
+          hits: non_neg_integer(),
+          traces: non_neg_integer()
         }
 
   @max_seed 4_294_967_295
@@ -160,6 +172,7 @@ defmodule AshQuint.Explore do
       traces: Keyword.get(opts, :traces, :all),
       batch: Keyword.get(opts, :batch, 20),
       max_steps: Keyword.get(opts, :max_steps) || model.random[:max_steps],
+      witnesses: witness_names(model),
       replay_opts: replay_opts(model, opts),
       model_hash: Manifest.hash_file(Path.join(config.root, model.model)),
       runner: Keyword.get(run_opts, :runner, &default_runner/3),
@@ -175,12 +188,21 @@ defmodule AshQuint.Explore do
       skipped: 0,
       seeds: settings.seed..settings.seed,
       failures: [],
-      error: nil
+      error: nil,
+      witnesses: Enum.map(witness_names(model), &%{name: &1, hits: 0, traces: 0})
     }
 
     session
     |> batches(report, 0)
     |> Map.update!(:failures, &Enum.reverse/1)
+  end
+
+  # The witnesses each batch asks Quint to count: only when they are
+  # predicates of the module random: runs.
+  defp witness_names(%Model{witnesses: witnesses, random: random}) do
+    if witnesses && witnesses[:main] == random[:main],
+      do: witnesses[:names] || [],
+      else: []
   end
 
   defp build_dir(run_opts), do: Keyword.get_lazy(run_opts, :build_dir, &Mix.Project.build_path/0)
@@ -230,11 +252,16 @@ defmodule AshQuint.Explore do
           max_samples: size,
           max_steps: session.max_steps,
           out: Path.join(tmp, "explore_{seq}.itf.json")
-        )
+        ) ++ witness_args(session.witnesses)
 
       case Gen.run_quint(session.config, args, session.runner) do
-        {:ok, _output, 0} ->
-          report = %{report | generated: report.generated + size}
+        {:ok, output, 0} ->
+          report = %{
+            report
+            | generated: report.generated + size,
+              witnesses: add_rates(report.witnesses, output)
+          }
+
           replay_all(session, report, files(tmp), seed, args)
 
         {:ok, output, _status} ->
@@ -246,6 +273,36 @@ defmodule AshQuint.Explore do
       end
     after
       File.rm_rf!(tmp)
+    end
+  end
+
+  defp witness_args([]), do: []
+  defp witness_args(names), do: ["--witnesses" | names]
+
+  # The rates plus a batch's counts from Quint's output; a batch without a
+  # name's count makes them unknown for the rest of the session.
+  defp add_rates(:unknown, _output), do: :unknown
+
+  defp add_rates(rates, output) do
+    counts =
+      ~r/^(\S+) was witnessed in (\d+) trace\(s\) out of (\d+) explored/m
+      |> Regex.scan(output, capture: :all_but_first)
+      |> Map.new(fn [name, hits, traces] ->
+        {name, {String.to_integer(hits), String.to_integer(traces)}}
+      end)
+
+    Enum.reduce_while(rates, [], fn rate, acc ->
+      case Map.fetch(counts, rate.name) do
+        {:ok, {hits, traces}} ->
+          {:cont, [%{rate | hits: rate.hits + hits, traces: rate.traces + traces} | acc]}
+
+        :error ->
+          {:halt, :unknown}
+      end
+    end)
+    |> case do
+      :unknown -> :unknown
+      acc -> Enum.reverse(acc)
     end
   end
 
@@ -399,9 +456,10 @@ defmodule AshQuint.Explore do
   What the `"explore <model>"` test runs (see `AshQuint.Case`): unless
   `ASH_QUINT_EXPLORE` is `1`, flunks at once, since the test was meant to
   be excluded from the suite; otherwise runs a session (`run/3`, with
-  `settings!/1` of the environment and `opts`), prints its summary line,
-  and flunks with `format/2` when it found failures or Quint failed.
-  `run_opts` are `run/3`'s, for tests.
+  `settings!/1` of the environment and `opts`), prints its summary line
+  (and its witnesses line, see `format/2`), and flunks with `format/2`
+  when it found failures or Quint failed. `run_opts` are `run/3`'s, for
+  tests.
   """
   @spec run!([option()], keyword()) :: :ok
   def run!(opts, run_opts \\ []) do
@@ -433,7 +491,12 @@ defmodule AshQuint.Explore do
 
   @doc """
   The report as text. A session without failures or error is one line:
-  `explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped`.
+  `explore counter: 100 traces (seeds 4031..4035), 0 failures, 0 skipped`,
+  followed, when the report has witnesses and a batch ran, by
+  `witnesses: witOverLimit 35/100 (35.0%), witResetAfterInc 100/100 (100.0%)`
+  (`0/100 (never)` for a witness never hit,
+  `witnesses: counts not found in Quint's output` when they are
+  `:unknown`).
   Otherwise a header line counts the failures, followed, each after a
   blank line, by each failure's message, its candidate (relative to the
   current directory), the `quint run` command that regenerates its trace
@@ -459,8 +522,29 @@ defmodule AshQuint.Explore do
   end
 
   defp summary(model, report) do
-    "explore #{model}: #{count(report.generated, "trace")} (seeds #{seeds(report)}), " <>
-      "#{count(length(report.failures), "failure")}, #{report.skipped} skipped"
+    line =
+      "explore #{model}: #{count(report.generated, "trace")} (seeds #{seeds(report)}), " <>
+        "#{count(length(report.failures), "failure")}, #{report.skipped} skipped"
+
+    case witnesses_line(report) do
+      nil -> line
+      witnesses -> line <> "\n" <> witnesses
+    end
+  end
+
+  # No line without witnesses, nor before a batch has run.
+  defp witnesses_line(%{witnesses: []}), do: nil
+  defp witnesses_line(%{generated: 0}), do: nil
+  defp witnesses_line(%{witnesses: :unknown}), do: "witnesses: counts not found in Quint's output"
+
+  defp witnesses_line(%{witnesses: rates}),
+    do: "witnesses: " <> Enum.map_join(rates, ", ", &rate/1)
+
+  defp rate(%{name: name, hits: 0, traces: traces}), do: "#{name} 0/#{traces} (never)"
+
+  defp rate(%{name: name, hits: hits, traces: traces}) do
+    pct = :erlang.float_to_binary(hits * 100 / traces, decimals: 1)
+    "#{name} #{hits}/#{traces} (#{pct}%)"
   end
 
   defp failure_block(failure) do
