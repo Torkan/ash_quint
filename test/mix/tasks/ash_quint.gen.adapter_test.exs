@@ -84,8 +84,9 @@ defmodule Mix.Tasks.AshQuint.Gen.AdapterTest do
     File.write!(path, Jason.encode!(json))
 
     assert_raise Mix.Error,
-                 "#{@manifest} has no model interface (manifest format 2); " <>
-                   "run MIX_ENV=test mix ash_quint.gen counter",
+                 "counter: #{@manifest} was written before ash_quint recorded " <>
+                   "the model interface (manifest format 2); " <>
+                   "run MIX_ENV=test mix ash_quint.gen counter to regenerate it",
                  fn -> gen(root, ["counter"]) end
 
     refute File.exists?(Path.join(root, @adapter_file))
@@ -95,7 +96,7 @@ defmodule Mix.Tasks.AshQuint.Gen.AdapterTest do
     File.rm!(Path.join(root, @manifest))
 
     assert_raise Mix.Error,
-                 "no manifest for :counter at #{@manifest}; " <>
+                 "counter: no manifest at #{@manifest} (no such file or directory); " <>
                    "run MIX_ENV=test mix ash_quint.gen counter",
                  fn -> gen(root, ["counter"]) end
   end

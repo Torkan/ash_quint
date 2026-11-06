@@ -32,7 +32,12 @@ defmodule AshQuint do
     * `mix ash_quint.gen` (`Mix.Tasks.AshQuint.Gen`) and `AshQuint.Gen` —
       run Quint and write the traces.
     * `AshQuint.Config` — `ash_quint.exs`.
-    * `AshQuint.Manifest` — `<out>/manifest.json`.
+    * `AshQuint.Manifest` — `<out>/manifest.json`, and `AshQuint.Interface`,
+      the model interface it records.
+    * `mix ash_quint.explore` (`Mix.Tasks.AshQuint.Explore`) and
+      `AshQuint.Explore` — replay fresh traces and report failures as
+      candidate regression traces; `mix ash_quint.promote`
+      (`Mix.Tasks.AshQuint.Promote`) commits them.
     * `mix ash_quint.coverage` (`Mix.Tasks.AshQuint.Coverage`) and
       `AshQuint.Coverage` — which outcomes each action reaches in the
       committed traces.

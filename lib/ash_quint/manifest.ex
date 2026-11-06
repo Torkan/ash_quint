@@ -181,6 +181,60 @@ defmodule AshQuint.Manifest do
   def read!(path), do: path |> File.read!() |> decode!(path)
 
   @doc """
+  Reads `model`'s committed manifest, `<out>/manifest.json` under
+  `config`'s root, for the Mix tasks. Each error is a message that names
+  the manifest and ends asking for `MIX_ENV=test mix ash_quint.gen <model>`:
+  a missing or unreadable file,
+  an invalid manifest (see `decode!/2`), and one written before what
+  `:need` asks for was recorded.
+
+  Options: `:need` — `:outcomes` (format 2 or later) or `:interface`
+  (format 3). Default: any format.
+  """
+  @spec load(AshQuint.Config.t(), AshQuint.Config.Model.t(), need: :outcomes | :interface) ::
+          {:ok, t()} | {:error, String.t()}
+  def load(config, model, opts \\ []) do
+    path = Path.join(model.out, "manifest.json")
+    regen = "run MIX_ENV=test mix ash_quint.gen #{model.name}"
+
+    with {:ok, binary} <- read(config, path, model, regen),
+         {:ok, manifest} <- decode(binary, path, regen) do
+      case {Keyword.get(opts, :need), manifest.version} do
+        {:outcomes, 1} ->
+          {:error, outdated(model, path, "outcomes", 1, regen)}
+
+        {:interface, v} when v < 3 ->
+          {:error, outdated(model, path, "the model interface", v, regen)}
+
+        _ok ->
+          {:ok, manifest}
+      end
+    end
+  end
+
+  defp read(config, path, model, regen) do
+    case File.read(Path.join(config.root, path)) do
+      {:ok, binary} ->
+        {:ok, binary}
+
+      {:error, reason} ->
+        {:error,
+         "#{model.name}: no manifest at #{path} (#{:file.format_error(reason)}); #{regen}"}
+    end
+  end
+
+  defp decode(binary, path, regen) do
+    {:ok, decode!(binary, path)}
+  rescue
+    error in ArgumentError -> {:error, Exception.message(error) <> "; " <> regen}
+  end
+
+  defp outdated(model, path, what, version, regen) do
+    "#{model.name}: #{path} was written before ash_quint recorded #{what} " <>
+      "(manifest format #{version}); #{regen} to regenerate it"
+  end
+
+  @doc """
   Decodes manifest JSON. `path` is used in error messages. Raises
   `ArgumentError` for invalid JSON, a version other than 1, 2 or 3, an
   unknown trace source or a malformed field (version 3 needs an

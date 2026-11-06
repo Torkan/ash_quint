@@ -45,7 +45,12 @@ defmodule Mix.Tasks.AshQuint.Gen.Adapter do
 
     config = Config.load!()
     [model] = Config.select!(config, [name])
-    manifest = read_manifest!(config, model)
+
+    manifest =
+      case Manifest.load(config, model, need: :interface) do
+        {:ok, manifest} -> manifest
+        {:error, message} -> Mix.raise(message)
+      end
 
     adapter =
       case opts[:adapter] do
@@ -69,23 +74,6 @@ defmodule Mix.Tasks.AshQuint.Gen.Adapter do
     )
 
     :ok
-  end
-
-  defp read_manifest!(config, model) do
-    path = Path.join(model.out, "manifest.json")
-    regenerate = "run MIX_ENV=test mix ash_quint.gen #{model.name}"
-
-    unless File.regular?(Path.join(config.root, path)) do
-      Mix.raise("no manifest for #{inspect(model.name)} at #{path}; #{regenerate}")
-    end
-
-    case Manifest.read!(Path.join(config.root, path)) do
-      %Manifest{interface: nil, version: version} ->
-        Mix.raise("#{path} has no model interface (manifest format #{version}); #{regenerate}")
-
-      manifest ->
-        manifest
-    end
   end
 
   defp default_adapter(model) do

@@ -134,7 +134,7 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
       root,
       [file],
       "#{file} was found against another version of #{@example}/model.qnt; " <>
-        "run mix ash_quint.gen counter and explore again"
+        "run MIX_ENV=test mix ash_quint.gen counter and explore again"
     )
   end
 
@@ -146,7 +146,7 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
       root,
       [file],
       "#{file} was found against another version of #{@example}/model.qnt; " <>
-        "run mix ash_quint.gen counter and explore again"
+        "run MIX_ENV=test mix ash_quint.gen counter and explore again"
     )
   end
 
@@ -178,9 +178,22 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
     refuses(
       root,
       [file],
-      "#{file}: no manifest for :counter at #{@manifest}; " <>
+      "#{file}: counter: no manifest at #{@manifest} (no such file or directory); " <>
         "run MIX_ENV=test mix ash_quint.gen counter"
     )
+  end
+
+  test "refuses an invalid manifest", %{root: root} do
+    file = candidate(root, "a.itf.json")
+    File.write!(Path.join(root, @manifest), "{")
+
+    before = snapshot(root)
+    error = assert_raise Mix.Error, fn -> promote(root, [file]) end
+
+    assert error.message =~
+             ~r/^#{Regex.escape(file)}: #{Regex.escape(@manifest)}: invalid JSON: .*; run MIX_ENV=test mix ash_quint.gen counter$/
+
+    assert snapshot(root) == before
   end
 
   test "refuses a format 2 manifest", %{root: root} do
@@ -199,8 +212,9 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
     refuses(
       root,
       [file],
-      "#{file}: #{@manifest} is manifest format 2; " <>
-        "run MIX_ENV=test mix ash_quint.gen counter first"
+      "#{file}: counter: #{@manifest} was written before ash_quint recorded " <>
+        "the model interface (manifest format 2); " <>
+        "run MIX_ENV=test mix ash_quint.gen counter to regenerate it"
     )
   end
 
@@ -234,7 +248,7 @@ defmodule Mix.Tasks.AshQuint.PromoteTest do
       root,
       [good, bad],
       "#{bad} was found against another version of #{@example}/model.qnt; " <>
-        "run mix ash_quint.gen counter and explore again"
+        "run MIX_ENV=test mix ash_quint.gen counter and explore again"
     )
   end
 

@@ -48,6 +48,7 @@ def cli do
   [
     preferred_envs: [
       "ash_quint.gen": :test,
+      "ash_quint.coverage": :test,
       "ash_quint.explore": :test,
       "ash_quint.promote": :test,
       "ash_quint.gen.adapter": :test

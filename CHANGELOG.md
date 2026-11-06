@@ -33,23 +33,24 @@
   `mix ash_quint.gen` keeps regression files as they are, notes one found
   against an earlier model, and refuses one without provenance. Manifest
   entries may carry an integer `seed`; `AshQuint.Gen` gains
-  `provenance/1`, `put_provenance/2` and `regression_entry!/3`, and its
-  `generated` map `notes`.
-- The manifest is format 3: `mix ash_quint.gen` runs
-  `quint compile --target=json` for each model after its traces and
-  records the model's `interface`: its actions with their pick shapes
-  (`unit`, `record` with typed fields, `value` or `map`), its result
-  variants and its other variables, with types as Quint text
-  (`AshQuint.Interface`). Formats 1 and 2 still decode (with no
-  interface); `mix ash_quint.gen --check` reports them as changed. A
-  failing compile, or a JSON IR whose shape the interface can't be read
-  from, is a gen error.
-- `mix ash_quint.coverage` and gen's table list every model action but
-  the init action: one no trace takes has a row of 0 steps
-  (`Undo    0`). `AshQuint.Coverage.from_manifest/2` takes
-  `init_action:`; its coverage has `all_actions`. A format 2 manifest's
-  table lists the taken actions only and ends with a note asking for a
-  regeneration.
+  `provenance/1`, `put_provenance/2`, `regression_file/2` and
+  `regression_entry!/3`, and its `generated` map `notes`.
+- For Mix tasks and tooling: `AshQuint.Manifest.load/3` reads a model's
+  manifest, with errors that ask for a regeneration (`need: :outcomes` or
+  `:interface`); `AshQuint.Config.Model.replay_opts/1` gives a model's
+  replay options; `AshQuint.Step.roots/1` the action and result roots.
+- The manifest is format 3. Each trace records `outcomes`, the result
+  labels counted per action (empty for models without `lastResult`), and
+  the manifest records the model's `interface`: `mix ash_quint.gen` runs
+  `quint compile --target=json` for each model after its traces and reads
+  its actions with their pick shapes (`unit`, `record` with typed fields,
+  `value` or `map`), its result variants and its other variables, with
+  types as Quint text (`AshQuint.Interface`). A failing compile, or a
+  JSON IR whose shape the interface can't be read from, is a gen error.
+  Older manifests still decode and replay: format 1 (0.1.0) without
+  outcomes, format 2 without an interface. `mix ash_quint.coverage` asks
+  to regenerate a format 1 manifest, and `mix ash_quint.gen --check`
+  reports both as changed.
 - **Breaking:** the sensitivity check reports model variables that no
   projection covers (`variable "inflight" is never projected`, target
   `{:var, name}`): the traces' variables, without the action and result
@@ -73,14 +74,14 @@
 - `mix ash_quint.coverage [model ...]` prints, from the committed
   manifests (no Node or Quint), which outcomes each model action reaches
   across the traces (`Inc  23  accepted 20  rejected:over_limit 3`), so
-  unreached paths show at a glance. `mix ash_quint.gen` prints the same
-  table after writing a model. Results are labelled `accepted` and
-  `rejected:<code>` (`AshQuint.Step.result_label/1`).
-- The manifest is format 2: each trace records `outcomes`, the result
-  labels counted per action (empty for models without `lastResult`).
-  Format 1 manifests still decode and replay; `mix ash_quint.coverage`
-  asks to regenerate them, and `mix ash_quint.gen --check` reports them
-  as changed.
+  unreached paths show at a glance. Every action of the model's interface
+  but the init action has a row; one no trace takes has 0 steps
+  (`Undo    0`). `mix ash_quint.gen` prints the same table after writing a
+  model. Results are labelled `accepted` and `rejected:<code>`
+  (`AshQuint.Step.result_label/1`). `AshQuint.Coverage.from_manifest/2`
+  takes `init_action:`, and its coverage has `all_actions`: a format 2
+  manifest's table lists the taken actions only and ends with a note
+  asking for a regeneration.
 - `AshQuint.Config.select!/2` selects models by name, for Mix tasks.
 - `allow_untested` takes `~w(...)` and `~W(...)` sigils as well as literal
   lists of strings.
@@ -90,7 +91,7 @@
   to `:pending` and the op into `step.op`; models set the names with
   `pending_result:` and `op_field:` (default `"Pending"` and `"op"`).
   `AshQuint.Replay` takes both as options.
-- Manifest entries (format 2) of traces with a call in flight have
+- Manifest entries of traces with a call in flight have
   `"concurrent": true` and `"max_in_flight"`. Both are optional on read, so
   sequential models' manifests are unchanged. `Pending` steps count as
   `pending` in `outcomes`, `AshQuint.Step.result_label/1` and the coverage

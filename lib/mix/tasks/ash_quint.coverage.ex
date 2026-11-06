@@ -65,37 +65,9 @@ defmodule Mix.Tasks.AshQuint.Coverage do
   end
 
   defp coverage(config, model) do
-    path = Path.join(model.out, "manifest.json")
-    regen = "run MIX_ENV=test mix ash_quint.gen #{model.name}"
-
-    with {:ok, binary} <- read(config, path, model, regen),
-         {:ok, manifest} <- decode(binary, path, regen) do
-      case Coverage.from_manifest(manifest, init_action: model.init_action) do
-        {:ok, coverage} ->
-          {:ok, coverage}
-
-        {:error, :no_outcomes} ->
-          {:error,
-           "#{model.name}: #{path} was written before ash_quint recorded outcomes " <>
-             "(manifest format 1); #{regen} to regenerate it"}
-      end
+    with {:ok, manifest} <- Manifest.load(config, model, need: :outcomes) do
+      # need: :outcomes refused format 1, so every entry has its outcomes.
+      {:ok, _coverage} = Coverage.from_manifest(manifest, init_action: model.init_action)
     end
-  end
-
-  defp read(config, path, model, regen) do
-    case File.read(Path.join(config.root, path)) do
-      {:ok, binary} ->
-        {:ok, binary}
-
-      {:error, reason} ->
-        {:error,
-         "#{model.name}: no manifest at #{path} (#{:file.format_error(reason)}); #{regen}"}
-    end
-  end
-
-  defp decode(binary, path, regen) do
-    {:ok, Manifest.decode!(binary, path)}
-  rescue
-    error in ArgumentError -> {:error, Exception.message(error) <> "; " <> regen}
   end
 end

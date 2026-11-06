@@ -61,7 +61,7 @@ defmodule AshQuint.Sensitivity do
   `use AshQuint.Case, sensitivity: true` runs the check as a test.
   """
 
-  alias AshQuint.{Replay, Trace}
+  alias AshQuint.{Replay, Step, Trace}
 
   @type mutant ::
           {:perturb, trace :: String.t(), index :: pos_integer(), key :: term()}
@@ -143,13 +143,9 @@ defmodule AshQuint.Sensitivity do
   # sorted and split by whether some clean report's expected values have
   # them as a key, that is, whether the projection covers them.
   defp vars(reports, opts) do
-    roots = [
-      hd(Keyword.get(opts, :action_path, ["lastAction"])),
-      hd(Keyword.get(opts, :result_path, ["lastResult"]))
-    ]
-
     model_vars =
-      for({trace, _report} <- reports, var <- trace.vars, uniq: true, do: var) -- roots
+      for({trace, _report} <- reports, var <- trace.vars, uniq: true, do: var) --
+        Step.roots(opts)
 
     projected =
       for {_trace, report} <- reports,

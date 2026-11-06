@@ -115,6 +115,7 @@ defmodule AshQuint.Case do
   """
 
   alias AshQuint.{Config, Manifest, Sensitivity, Trace}
+  alias AshQuint.Config.Model
 
   @doc false
   defmacro __using__(opts) do
@@ -409,15 +410,7 @@ defmodule AshQuint.Case do
 
     # adapter_opts is the caller's AST, spliced in as is.
     replay_opts =
-      [
-        model: model,
-        action_path: config.action_path,
-        result_path: config.result_path,
-        pending_result: config.pending_result,
-        op_field: config.op_field,
-        init_action: config.init_action,
-        adapter_opts: setup.adapter_opts
-      ] ++ setup.replay
+      Model.replay_opts(config) ++ [adapter_opts: setup.adapter_opts] ++ setup.replay
 
     # Each trace's path and its Trace.load!/2 options.
     traces = Enum.map(manifest.traces, &trace(&1, out, manifest.seed))

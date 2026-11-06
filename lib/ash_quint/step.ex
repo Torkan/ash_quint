@@ -42,6 +42,9 @@ defmodule AshQuint.Step do
           | {:pending_result, String.t()}
           | {:op_field, String.t()}
 
+  @action_path ["lastAction"]
+  @result_path ["lastResult"]
+
   @doc """
   Builds the step for the state at `index`. Returns `{:error, reason}` when
   the action is missing or not a variant, the result isn't `Accepted`,
@@ -49,8 +52,8 @@ defmodule AshQuint.Step do
   """
   @spec from_state(map(), non_neg_integer(), [option()]) :: {:ok, t()} | {:error, String.t()}
   def from_state(state, index, opts) do
-    action_path = Keyword.get(opts, :action_path, ["lastAction"])
-    result_path = Keyword.get(opts, :result_path, ["lastResult"])
+    action_path = Keyword.get(opts, :action_path, @action_path)
+    result_path = Keyword.get(opts, :result_path, @result_path)
     pending = Keyword.get(opts, :pending_result, "Pending")
     op_field = Keyword.get(opts, :op_field, "op")
 
@@ -64,9 +67,22 @@ defmodule AshQuint.Step do
          nondet_picks: picks,
          result: result,
          op: op,
-         state: Map.drop(state, [hd(action_path), hd(result_path)])
+         state: Map.drop(state, roots(opts))
        }}
     end
+  end
+
+  @doc """
+  The top-level variables that `action_path` and `result_path` in `opts`
+  start with (by default `"lastAction"` and `"lastResult"`): the ones a
+  step's `state` leaves out.
+  """
+  @spec roots(keyword()) :: [String.t()]
+  def roots(opts) do
+    [
+      hd(Keyword.get(opts, :action_path, @action_path)),
+      hd(Keyword.get(opts, :result_path, @result_path))
+    ]
   end
 
   @doc """

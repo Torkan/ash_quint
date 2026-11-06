@@ -31,7 +31,7 @@ defmodule AshQuint.Scaffold do
   """
 
   alias AshQuint.Config.Model
-  alias AshQuint.{Interface, Manifest}
+  alias AshQuint.{Coverage, Interface, Manifest}
 
   @reserved ~w(do end fn when and or not in true false nil catch rescue after else ctx)
 
@@ -41,7 +41,7 @@ defmodule AshQuint.Scaffold do
   """
   @spec adapter_source(module(), Manifest.t(), Model.t()) :: String.t()
   def adapter_source(adapter, %Manifest{interface: %Interface{} = interface} = manifest, model) do
-    outcomes = outcomes(manifest)
+    outcomes = outcomes(manifest, model)
 
     clauses =
       case Enum.reject(interface.actions, &(&1.name == model.init_action)) do
@@ -130,14 +130,10 @@ defmodule AshQuint.Scaffold do
 
   defp format(source), do: IO.iodata_to_binary([Code.format_string!(source), "\n"])
 
-  # Each action's outcome labels over the manifest's traces.
-  defp outcomes(manifest) do
-    for entry <- manifest.traces,
-        {action, labels} <- entry.outcomes || %{},
-        label <- Map.keys(labels),
-        reduce: %{} do
-      acc -> Map.update(acc, action, MapSet.new([label]), &MapSet.put(&1, label))
-    end
+  # Each action's outcome labels over the manifest's traces, sorted.
+  defp outcomes(manifest, model) do
+    {:ok, coverage} = Coverage.from_manifest(manifest, init_action: model.init_action)
+    Map.new(coverage.rows, &{&1.action, &1.outcomes |> Map.keys() |> Enum.sort()})
   end
 
   defp form(%{picks: :record, fields: fields} = action, interface, model, outcomes) do
@@ -145,7 +141,7 @@ defmodule AshQuint.Scaffold do
       is_list(interface.results) and model.pending_result in interface.results and
         Enum.any?(fields, &(&1.name == model.op_field))
 
-    labels = outcomes |> Map.get(action.name, MapSet.new()) |> MapSet.to_list()
+    labels = Map.get(outcomes, action.name, [])
 
     cond do
       not concurrent -> :ok

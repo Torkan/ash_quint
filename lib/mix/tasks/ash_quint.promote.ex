@@ -22,8 +22,8 @@ defmodule Mix.Tasks.AshQuint.Promote do
 
     * has no provenance;
     * names a model that isn't configured;
-    * has no manifest for its model, or one older than format 3 (written
-      before the model interface was recorded; regenerate it);
+    * has no valid manifest for its model, or one older than format 3
+      (written before the model interface was recorded; regenerate it);
     * was found against another version of the model file than both the
       manifest's and the current one (regenerate and explore again);
     * would overwrite a regression trace already there.
@@ -70,11 +70,10 @@ defmodule Mix.Tasks.AshQuint.Promote do
     binary = File.read!(file)
     provenance = provenance!(file, binary)
     [model] = Config.select!(config, [provenance["model"]])
-    manifest_path = Path.join(model.out, "manifest.json")
-    manifest = read_manifest!(config, file, model, manifest_path)
+    manifest = manifest!(config, file, model)
     check_hash!(config, file, model, manifest, provenance)
 
-    name = "regression_#{provenance["seed"]}_#{provenance["index"]}.itf.json"
+    name = Gen.regression_file(provenance["seed"], provenance["index"])
     target = Path.join(model.out, name)
 
     if File.exists?(Path.join(config.root, target)) or
@@ -86,7 +85,6 @@ defmodule Mix.Tasks.AshQuint.Promote do
       model: model,
       root: config.root,
       manifest: manifest,
-      manifest_path: manifest_path,
       target: target,
       binary: binary,
       entry: entry!(file, name, binary, model)
@@ -111,7 +109,7 @@ defmodule Mix.Tasks.AshQuint.Promote do
              Map.get(manifest.models, model.model) == current do
       Mix.raise(
         "#{file} was found against another version of #{model.model}; " <>
-          "run mix ash_quint.gen #{model.name} and explore again"
+          "run MIX_ENV=test mix ash_quint.gen #{model.name} and explore again"
       )
     end
   end
@@ -122,27 +120,17 @@ defmodule Mix.Tasks.AshQuint.Promote do
     error in [ArgumentError, ITF.Error] -> Mix.raise("#{file}: " <> Exception.message(error))
   end
 
-  defp read_manifest!(config, file, model, path) do
-    regen = "run MIX_ENV=test mix ash_quint.gen #{model.name}"
-
-    case File.read(Path.join(config.root, path)) do
-      {:ok, binary} ->
-        case Manifest.decode!(binary, path) do
-          %Manifest{version: 3} = manifest ->
-            manifest
-
-          %Manifest{version: version} ->
-            Mix.raise("#{file}: #{path} is manifest format #{version}; #{regen} first")
-        end
-
-      {:error, _reason} ->
-        Mix.raise("#{file}: no manifest for #{inspect(model.name)} at #{path}; #{regen}")
+  defp manifest!(config, file, model) do
+    case Manifest.load(config, model, need: :interface) do
+      {:ok, manifest} -> manifest
+      {:error, message} -> Mix.raise("#{file}: " <> message)
     end
   end
 
-  defp write!(%{root: root, manifest: manifest, manifest_path: path}, promotions) do
+  defp write!(%{root: root, model: model, manifest: manifest}, promotions) do
     Enum.each(promotions, &File.write!(Path.join(root, &1.target), &1.binary))
     traces = manifest.traces ++ Enum.map(promotions, & &1.entry)
-    File.write!(Path.join(root, path), Manifest.encode(%{manifest | traces: traces}))
+    path = Path.join([root, model.out, "manifest.json"])
+    File.write!(path, Manifest.encode(%{manifest | traces: traces}))
   end
 end

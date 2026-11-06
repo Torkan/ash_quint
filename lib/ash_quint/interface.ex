@@ -2,7 +2,7 @@ defmodule AshQuint.Interface do
   @moduledoc """
   A model's interface: its actions with their pick shapes, its result
   variants and its other variables, read from the JSON IR of
-  `quint compile --target json` and recorded in the manifest (format 3,
+  `quint compile --target=json` and recorded in the manifest (format 3,
   see `AshQuint.Manifest`).
 
     * `actions` — the variants of the action variable (at the model's
@@ -45,9 +45,8 @@ defmodule AshQuint.Interface do
   @doc """
   The interface of the model whose JSON IR is `ir` (decoded).
 
-  Options: `:action_path` and `:result_path` (default `["lastAction"]` and
-  `["lastResult"]`), the model's paths; `:quint`, the Quint version, for
-  error messages.
+  Options: `:action_path` and `:result_path` (required), the model's
+  paths; `:quint`, the Quint version, for error messages.
 
   Variables are the `var` declarations of every module in the IR (a tests
   module declares none: they are in the module it imports), their names
@@ -61,9 +60,9 @@ defmodule AshQuint.Interface do
           result_path: [String.t()],
           quint: String.t()
         ) :: {:ok, t()} | {:error, String.t()}
-  def from_ir(ir, opts \\ []) do
-    action_path = Keyword.get(opts, :action_path, ["lastAction"])
-    result_path = Keyword.get(opts, :result_path, ["lastResult"])
+  def from_ir(ir, opts) do
+    action_path = Keyword.fetch!(opts, :action_path)
+    result_path = Keyword.fetch!(opts, :result_path)
     quint = Keyword.get(opts, :quint, "?")
 
     try do

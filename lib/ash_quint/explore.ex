@@ -42,6 +42,7 @@ defmodule AshQuint.Explore do
   """
 
   alias AshQuint.Config
+  alias AshQuint.Config.Model
   alias AshQuint.Gen
   alias AshQuint.ITF
   alias AshQuint.Manifest
@@ -183,15 +184,8 @@ defmodule AshQuint.Explore do
   end
 
   defp replay_opts(model, opts) do
-    [
-      model: model.name,
-      action_path: model.action_path,
-      result_path: model.result_path,
-      pending_result: model.pending_result,
-      op_field: model.op_field,
-      init_action: model.init_action,
-      adapter_opts: Keyword.get(opts, :adapter_opts, [])
-    ] ++ Keyword.get(opts, :replay, [])
+    Model.replay_opts(model) ++
+      [adapter_opts: Keyword.get(opts, :adapter_opts, [])] ++ Keyword.get(opts, :replay, [])
   end
 
   defp batches(session, report, k) do
@@ -277,7 +271,7 @@ defmodule AshQuint.Explore do
     name = "#{seed}_#{index}"
     trace = decode(binary, name, seed)
 
-    if selected?(session, trace, name) do
+    if selected?(session, trace, index) do
       report = %{report | replayed: report.replayed + 1}
 
       case replay(session, trace) do
@@ -304,10 +298,11 @@ defmodule AshQuint.Explore do
     %{trace | name: name, source: :regression, seed: seed}
   end
 
-  defp selected?(%{traces: :all}, _trace, _name), do: true
+  defp selected?(%{traces: :all}, _trace, _index), do: true
 
-  defp selected?(session, trace, name) do
-    entry = Gen.entry("regression_#{name}.itf.json", :regression, name, trace, session.model)
+  defp selected?(session, trace, index) do
+    file = Gen.regression_file(trace.seed, index)
+    entry = Gen.entry(file, :regression, trace.name, trace, session.model)
     entry.concurrent == (session.traces == :concurrent)
   end
 
@@ -364,7 +359,7 @@ defmodule AshQuint.Explore do
       "cut_at" => cut_at
     }
 
-    path = Path.join(session.out, "regression_#{seed}_#{index}.itf.json")
+    path = Path.join(session.out, Gen.regression_file(seed, index))
     File.mkdir_p!(session.out)
     File.write!(path, Gen.put_provenance(candidate, provenance))
 

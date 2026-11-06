@@ -377,4 +377,22 @@ defmodule AshQuint.Config.Model do
           witnesses: keyword() | nil,
           scenarios: keyword() | nil
         }
+
+  @doc """
+  The `AshQuint.Replay.run/3` options the model's settings give: `:model`
+  (its name), `:action_path`, `:result_path`, `:pending_result`,
+  `:op_field` and `:init_action`. `AshQuint.Case` and `AshQuint.Explore`
+  add the test module's `adapter_opts` and `replay:` timeouts.
+  """
+  @spec replay_opts(t()) :: keyword()
+  def replay_opts(%__MODULE__{} = model) do
+    [
+      model: model.name,
+      action_path: model.action_path,
+      result_path: model.result_path,
+      pending_result: model.pending_result,
+      op_field: model.op_field,
+      init_action: model.init_action
+    ]
+  end
 end

@@ -40,7 +40,8 @@ mix test.check_migrations
   steps.
 - `AshQuint.Adapter`, `AshQuint.Names`, `AshQuint.Replay` — the adapter
   behaviour and the replay; `AshQuint.Replay.Ops` (internal) — the ops in
-  flight during a concurrent replay.
+  flight during a concurrent replay; `AshQuint.Diff` (internal) — the
+  differing entries of a long key mismatch.
 - `AshQuint.Gate` — gates (`checkpoint/1`, `put_info/2`,
   `current_replay/0`) and the op-task primitives;
   `AshQuint.Application` starts `AshQuint.Gate.Table`, the ETS table that
@@ -51,7 +52,7 @@ mix test.check_migrations
   interleavings and unprojected model variables; `overlaps/1` over a
   replay report.
 - `AshQuint.Interface` — the model interface (actions and their picks,
-  results, vars) read from `quint compile --target json` and recorded in
+  results, vars) read from `quint compile --target=json` and recorded in
   the manifest (format 3). Its tests read the JSON IR fixtures in
   `test/fixtures/quint_ir/` (`counter.json`, `race.json`,
   `counter_tests.json`), captured from Quint 0.33.1. Recapture them with

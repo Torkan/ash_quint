@@ -432,6 +432,14 @@ defmodule AshQuint.Gen do
   defp trim_ext(file), do: String.replace_suffix(file, ".itf.json", "")
 
   @doc """
+  The file name of the regression trace found as trace `index` of the
+  `quint run` with `seed`: `regression_<seed>_<index>.itf.json`, its name
+  `"<seed>_<index>"`.
+  """
+  @spec regression_file(integer(), non_neg_integer()) :: String.t()
+  def regression_file(seed, index), do: "regression_#{seed}_#{index}.itf.json"
+
+  @doc """
   The manifest entry for the regression trace `binary`, the contents of
   `file` (`regression_<name>.itf.json`): `entry/5` with source
   `:regression` and the name from the file name, plus the `seed` from its
@@ -488,24 +496,13 @@ defmodule AshQuint.Gen do
   """
   @spec put_provenance(binary(), map()) :: binary()
   def put_provenance(binary, provenance) do
-    %Jason.OrderedObject{values: values} = Jason.decode!(binary, objects: :ordered_objects)
     entry = {"ash_quint", sorted(provenance)}
 
-    values =
-      Enum.map(values, fn
-        {"#meta", %Jason.OrderedObject{values: meta}} ->
-          meta =
-            if List.keymember?(meta, "ash_quint", 0),
-              do: List.keyreplace(meta, "ash_quint", 0, entry),
-              else: meta ++ [entry]
-
-          {"#meta", %Jason.OrderedObject{values: meta}}
-
-        other ->
-          other
-      end)
-
-    Jason.encode!(%Jason.OrderedObject{values: values})
+    update_meta(binary, fn meta ->
+      if List.keymember?(meta, "ash_quint", 0),
+        do: List.keyreplace(meta, "ash_quint", 0, entry),
+        else: meta ++ [entry]
+    end)
   end
 
   defp sorted(map) when is_map(map) do
@@ -585,15 +582,20 @@ defmodule AshQuint.Gen do
   """
   @spec normalize(binary()) :: binary()
   def normalize(binary) do
+    update_meta(binary, fn meta ->
+      Enum.reject(meta, fn {key, _value} -> key in ["description", "timestamp"] end)
+    end)
+  end
+
+  # Applies `fun` to the top-level #meta's key-value pairs, keeping
+  # everything else as it is, key order included.
+  defp update_meta(binary, fun) do
     %Jason.OrderedObject{values: values} = Jason.decode!(binary, objects: :ordered_objects)
 
     values =
       Enum.map(values, fn
         {"#meta", %Jason.OrderedObject{values: meta}} ->
-          {"#meta",
-           %Jason.OrderedObject{
-             values: Enum.reject(meta, fn {key, _} -> key in ["description", "timestamp"] end)
-           }}
+          {"#meta", %Jason.OrderedObject{values: fun.(meta)}}
 
         other ->
           other
