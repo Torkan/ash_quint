@@ -455,6 +455,29 @@ defmodule AshQuint.GenTest do
     end
   end
 
+  describe "cut/2" do
+    test "keeps the states up to the index, and the rest in order" do
+      binary = ~s({"vars":["x"],"#meta":{"status":"ok"},"states":[{"x":0},{"x":1},{"x":2}]})
+
+      assert Gen.cut(binary, 1) ==
+               ~s({"vars":["x"],"#meta":{"status":"ok"},"states":[{"x":0},{"x":1}]})
+
+      assert Gen.cut(binary, 2) == binary
+    end
+  end
+
+  describe "put_source/2" do
+    test "replaces #meta.source in place, or appends it" do
+      binary = ~s({"#meta":{"format":"ITF","source":"w.qnt","status":"ok"},"states":[]})
+
+      assert Gen.put_source(binary, "m.qnt") ==
+               ~s({"#meta":{"format":"ITF","source":"m.qnt","status":"ok"},"states":[]})
+
+      assert Gen.put_source(~s({"#meta":{"status":"ok"},"states":[]}), "m.qnt") ==
+               ~s({"#meta":{"status":"ok","source":"m.qnt"},"states":[]})
+    end
+  end
+
   describe "generate/3" do
     setup :setup_root
 

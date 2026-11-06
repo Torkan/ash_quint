@@ -28,7 +28,8 @@ defmodule AshQuint.Config do
             # random and witnesses also take init: and step:, the model's
             # init and step actions when they aren't named init and step
             witnesses: [main: "counter", names: ["witA"], max_steps: 12, max_samples: 50_000],
-            scenarios: [main: "tests", match: "Test$"]
+            scenarios: [main: "tests", match: "Test$"],
+            shrink: true                                  # or [apply: "apply", rounds: 20]
           ]
         ]
       ]
@@ -36,7 +37,11 @@ defmodule AshQuint.Config do
   `backend` is the Quint simulator backend, passed as `--backend` to every
   `quint run` and `quint test`; unset, Quint picks its own default. Each
   `main` is the name of a Quint module: the model's for `random` and
-  `witnesses`, the tests file's for `scenarios`. Each model needs at least
+  `witnesses`, the tests file's for `scenarios`. `shrink` turns on the
+  shrinking of explore candidates (see `AshQuint.Shrink`): `true`, or a
+  keyword list with `apply` (a model action taking the action value, called
+  in place of each action's operator) and `rounds` (the budget of rounds,
+  default 20); `false` or unset is off. Each model needs at least
   one of `random`, `witnesses` and `scenarios`. Unknown and duplicate keys
   are errors. Paths, the defaults built from a model's name included, must
   be relative to the project root and stay inside it; they are kept exactly
@@ -96,8 +101,11 @@ defmodule AshQuint.Config do
     init_action: :string,
     random: :random,
     witnesses: :witnesses,
-    scenarios: :scenarios
+    scenarios: :scenarios,
+    shrink: :shrink
   ]
+
+  @shrink_keys [apply: :string, rounds: :pos_integer]
 
   @source_keys %{
     random: [
@@ -218,13 +226,18 @@ defmodule AshQuint.Config do
           out: Path.join(top.fixture_dir, dir),
           on_missing_model: top.on_missing_model,
           backend: top.backend
-        ] ++ opts
+        ] ++ Keyword.update(opts, :shrink, nil, &shrink/1)
       )
 
     # A default path joins the model name, which can contain `..`.
     Enum.each([:model, :tests, :out], &check!(:path, Map.fetch!(model, &1), path ++ [&1], root))
     model
   end
+
+  # `shrink: true` is every default; `false` is off, like unset.
+  defp shrink(true), do: []
+  defp shrink(false), do: nil
+  defp shrink(opts), do: opts
 
   # Two models writing one `out` would remove each other's traces, and an
   # `out` at the root would take over the project's own files.
@@ -322,6 +335,17 @@ defmodule AshQuint.Config do
     end
   end
 
+  defp check!(:shrink, value, _path, _root) when is_boolean(value), do: :ok
+
+  defp check!(:shrink, value, path, _root) do
+    unless is_list(value) and Keyword.keyword?(value) do
+      type_error!(path, "true or a keyword list", value)
+    end
+
+    check_keyword!(value, path, @shrink_keys)
+    check_values!(value, path, @shrink_keys, nil)
+  end
+
   defp check!(source, value, path, _root) when source in @sources do
     spec = Map.fetch!(@source_keys, source)
     check_keyword!(value, path, spec)
@@ -376,7 +400,8 @@ defmodule AshQuint.Config.Model do
             init_action: "Init",
             random: nil,
             witnesses: nil,
-            scenarios: nil
+            scenarios: nil,
+            shrink: nil
 
   @type t :: %__MODULE__{
           name: atom(),
@@ -393,7 +418,8 @@ defmodule AshQuint.Config.Model do
           init_action: String.t(),
           random: keyword() | nil,
           witnesses: keyword() | nil,
-          scenarios: keyword() | nil
+          scenarios: keyword() | nil,
+          shrink: keyword() | nil
         }
 
   @doc """

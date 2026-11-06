@@ -401,7 +401,7 @@ defmodule AshQuint.Explore do
     if failure_index == states - 1 do
       {binary, nil, reproduced?(session, binary, name, seed, failure_index)}
     else
-      cut = cut(binary, failure_index)
+      cut = Gen.cut(binary, failure_index)
 
       if reproduced?(session, cut, name, seed, failure_index),
         do: {cut, failure_index, true},
@@ -411,18 +411,6 @@ defmodule AshQuint.Explore do
 
   defp reproduced?(session, binary, name, seed, failure_index) do
     match?({:failed, ^failure_index, _message}, replay(session, decode(binary, name, seed)))
-  end
-
-  defp cut(binary, index) do
-    %Jason.OrderedObject{values: values} = Jason.decode!(binary, objects: :ordered_objects)
-
-    values =
-      Enum.map(values, fn
-        {"states", states} -> {"states", Enum.take(states, index + 1)}
-        other -> other
-      end)
-
-    Jason.encode!(%Jason.OrderedObject{values: values})
   end
 
   defp failure(session, {seed, index, args}, full, candidate, message, cut_at) do

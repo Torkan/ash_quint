@@ -666,6 +666,38 @@ defmodule AshQuint.Gen do
     end)
   end
 
+  @doc """
+  Cuts a trace after state `index`: its states 0..index, everything else
+  kept, key order included. Compact JSON without a trailing newline.
+  """
+  @spec cut(binary(), non_neg_integer()) :: binary()
+  def cut(binary, index) do
+    %Jason.OrderedObject{values: values} = Jason.decode!(binary, objects: :ordered_objects)
+
+    values =
+      Enum.map(values, fn
+        {"states", states} -> {"states", Enum.take(states, index + 1)}
+        other -> other
+      end)
+
+    Jason.encode!(%Jason.OrderedObject{values: values})
+  end
+
+  @doc """
+  Sets a trace's top-level `#meta.source` (the model file Quint ran),
+  replacing it in place or else appending it. Everything else is kept, key
+  order included; like `normalize/1`, the result is compact JSON without a
+  trailing newline.
+  """
+  @spec put_source(binary(), String.t()) :: binary()
+  def put_source(binary, source) do
+    update_meta(binary, fn meta ->
+      if List.keymember?(meta, "source", 0),
+        do: List.keyreplace(meta, "source", 0, {"source", source}),
+        else: meta ++ [{"source", source}]
+    end)
+  end
+
   # Applies `fun` to the top-level #meta's key-value pairs, keeping
   # everything else as it is, key order included.
   defp update_meta(binary, fun) do

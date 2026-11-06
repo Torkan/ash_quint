@@ -111,6 +111,7 @@ defmodule AshQuint.MixProject do
           Mix.Tasks.AshQuint.Promote,
           Mix.Tasks.AshQuint.Explore,
           AshQuint.Explore,
+          AshQuint.Shrink,
           Mix.Tasks.AshQuint.Gen.Adapter,
           AshQuint.Scaffold,
           Mix.Tasks.AshQuint.Coverage,

@@ -440,6 +440,62 @@ defmodule AshQuint.ConfigTest do
     end
   end
 
+  describe "shrink" do
+    test "shrink: true is the empty keyword list" do
+      assert counter(minimal(shrink: true)).shrink == []
+    end
+
+    test "shrink: options are kept" do
+      assert counter(minimal(shrink: [apply: "apply", rounds: 5])).shrink ==
+               [apply: "apply", rounds: 5]
+    end
+
+    test "shrink: false and unset are off" do
+      assert counter(minimal(shrink: false)).shrink == nil
+      assert counter(minimal()).shrink == nil
+    end
+
+    test "an unknown shrink key is an error" do
+      assert_raises_config(
+        minimal(shrink: [step: "x"]),
+        "ash_quint.exs: unknown key models.counter.shrink.step"
+      )
+    end
+
+    test "a duplicate shrink key is an error" do
+      assert_raises_config(
+        minimal(shrink: [rounds: 1, rounds: 2]),
+        "ash_quint.exs: duplicate key models.counter.shrink.rounds"
+      )
+    end
+
+    test "shrink: rounds must be positive" do
+      assert_raises_config(
+        minimal(shrink: [rounds: 0]),
+        "ash_quint.exs: models.counter.shrink.rounds must be a positive integer, got 0"
+      )
+    end
+
+    test "shrink: apply must be a string" do
+      assert_raises_config(
+        minimal(shrink: [apply: :apply]),
+        "ash_quint.exs: models.counter.shrink.apply must be a string, got :apply"
+      )
+    end
+
+    test "shrink: of another type is an error" do
+      assert_raises_config(
+        minimal(shrink: 1),
+        "ash_quint.exs: models.counter.shrink must be true or a keyword list, got 1"
+      )
+
+      assert_raises_config(
+        minimal(shrink: [:apply]),
+        "ash_quint.exs: models.counter.shrink must be true or a keyword list, got [:apply]"
+      )
+    end
+  end
+
   test "quint_cmd substitutes the version" do
     assert Config.quint_cmd(validate(minimal())) == [
              "npx",
