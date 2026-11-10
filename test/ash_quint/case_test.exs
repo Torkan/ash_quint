@@ -532,6 +532,33 @@ defmodule AshQuint.CaseTest do
     end
   end
 
+  describe "sandbox:" do
+    # No such repo: Ecto.Adapters.SQL.Sandbox.checkout/1 raises on it,
+    # which shows where the option reaches (the Postgres tests run it).
+    @no_repo ", sandbox: AshQuint.Test.NoRepo"
+
+    test "reaches the sensitivity check, not the trace tests" do
+      mod = compile(:ok, "use ExUnit.Case, register: false", ", sensitivity: true" <> @no_repo)
+
+      assert run_test(mod, "random 0") == :ok
+      assert run_test(mod, "scenario incTest") == :ok
+
+      error = assert_raise UndefinedFunctionError, fn -> run_test(mod, "sensitivity of ok") end
+      assert error.module == AshQuint.Test.NoRepo
+    end
+
+    test "sandbox: compile errors" do
+      for extra <- ["true", ~s("MyApp.Repo"), "[MyApp.Repo]", "@repo"] do
+        error =
+          assert_raise CompileError, fn ->
+            compile(:ok, "use ExUnit.Case, register: false", ", sandbox: #{extra}")
+          end
+
+        assert error.description == "sandbox must be a repo module, got #{extra}"
+      end
+    end
+  end
+
   describe "concurrent traces" do
     # Compiles a test module for `model` with `adapter` and extra options
     # given as source.

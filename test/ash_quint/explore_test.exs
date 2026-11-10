@@ -12,6 +12,7 @@ defmodule AshQuint.ExploreTest do
     ConcurrentToyAdapter,
     CounterAdapter,
     CounterAdapterOffByOne,
+    FixtureRunner,
     RaceAdapter,
     ToyAdapter
   }
@@ -75,29 +76,9 @@ defmodule AshQuint.ExploreTest do
     defdelegate outcome(result), to: ToyAdapter
   end
 
-  # A runner that writes the fixture traces matching `glob`, cyclically, as
-  # the batch's explore_<i>.itf.json files, sends its args to the test and
-  # prints `output`.
-  defp runner(glob \\ @ok_traces, output \\ "") do
-    fixtures = glob |> Path.wildcard() |> Enum.sort()
-    test = self()
-
-    fn _exe, args, opts ->
-      send(test, {:quint, args, opts})
-      "--out-itf=" <> out = Enum.find(args, &String.starts_with?(&1, "--out-itf="))
-      "--n-traces=" <> n = Enum.find(args, &String.starts_with?(&1, "--n-traces="))
-
-      fixtures
-      |> Stream.cycle()
-      |> Enum.take(String.to_integer(n))
-      |> Enum.with_index()
-      |> Enum.each(fn {fixture, i} ->
-        File.cp!(fixture, String.replace(out, "{seq}", Integer.to_string(i)))
-      end)
-
-      {output, 0}
-    end
-  end
+  # Writes the fixture traces matching `glob` as each batch's files (see
+  # AshQuint.Test.FixtureRunner).
+  defp runner(glob \\ @ok_traces, output \\ ""), do: FixtureRunner.runner(glob, output)
 
   # A config in `tmp_dir` with the ok fixture model and `witnesses`.
   defp witness_config(tmp_dir, witnesses) do
@@ -1029,6 +1010,34 @@ defmodule AshQuint.ExploreTest do
                  "explore test for :ok ran without mix ash_quint.explore; " <>
                    "add :quint_explore to ExUnit.start(exclude: …) in test/test_helper.exs"
       end
+    end
+
+    test "the explore test passes sandbox: to the session, which checks it before Quint runs" do
+      mod = Module.concat(__MODULE__, "Gen#{System.unique_integer([:positive])}")
+
+      Code.compile_string("""
+      defmodule #{inspect(mod)} do
+        use ExUnit.Case, register: false
+
+        use AshQuint.Case,
+          config: #{inspect(@config)},
+          model: :ok,
+          adapter: AshQuint.Test.ToyAdapter,
+          explore: true,
+          sandbox: AshQuint.Test.NoRepo
+      end
+      """)
+
+      # No such repo: Ecto.Adapters.SQL.Sandbox.checkout/1 raises on it
+      # (the Postgres tests check a real one), before Quint is run.
+      test_name = :"test explore ok"
+
+      error =
+        assert_raise UndefinedFunctionError, fn ->
+          with_env(@explore_env, fn -> apply(mod, test_name, [%{}]) end)
+        end
+
+      assert error.module == AshQuint.Test.NoRepo
     end
 
     test "run!/2 prints the summary line", %{tmp_dir: tmp_dir} do

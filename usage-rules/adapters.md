@@ -55,6 +55,12 @@ action binding its picks and a `project/1` with every model variable.
   (`async: false`), with `finish/2` deleting what the replay committed.
 - For Postgres locks, record `AshQuint.Ash.pg_backend_pid/1` inside the
   call and define `blocked?/2` with `AshQuint.Ash.pg_blocked?/2`.
+- With a database, set `sandbox: MyApp.Repo` on a module with `explore:`
+  or `sensitivity:`, and make the case template skip its sandbox setup for
+  tests tagged `quint_explore:` and `quint_sensitivity:`. Otherwise every
+  replay of those tests runs in one transaction, and a long explore run
+  fills Postgres's lock table (`out of shared memory`), which explore
+  reports as a regression to promote. Don't promote such a candidate.
 
 ## Sensitivity
 

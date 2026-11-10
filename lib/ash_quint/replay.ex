@@ -60,7 +60,7 @@ defmodule AshQuint.Replay do
 
   @compile {:no_warn_undefined, AshQuint.Gate.Telemetry}
 
-  alias AshQuint.{Adapter, Diff, Gate, Step, Trace}
+  alias AshQuint.{Adapter, Diff, Gate, Sandbox, Step, Trace}
   alias AshQuint.Gate.Telemetry, as: GateTelemetry
   alias AshQuint.Replay.Ops
 
@@ -92,6 +92,7 @@ defmodule AshQuint.Replay do
           | {:complete_timeout, non_neg_integer()}
           | {:gate_timeout, non_neg_integer()}
           | {:context, [String.t()]}
+          | {:sandbox, module() | nil}
 
   @type synced :: %{
           index: pos_integer(),
@@ -170,6 +171,15 @@ defmodule AshQuint.Replay do
       returns anyway and the replay fails (ms). Default `5_000`.
     * `:context` — lines that end every failure message, after the model
       step line (for instance the trace's path). Default `[]`.
+    * `:sandbox` — an Ecto repo using `Ecto.Adapters.SQL.Sandbox` (needs
+      `ecto_sql`). When the calling process neither owns a sandbox
+      connection nor is allowed on one, the replay checks one out
+      (`Ecto.Adapters.SQL.Sandbox.checkout/1`) before `init/2`, allows
+      each op task on it, and checks it in after `finish/2`, on every
+      path, adapter exceptions included: the trace runs in a transaction
+      of its own, and rolling it back releases its rows and locks. When
+      the process already has one (a test whose case template set up the
+      sandbox), the replay takes none and gives none back. Default `nil`.
   """
   @spec run(module(), Trace.t(), [option()]) :: {:ok, report()} | {:error, failure()}
   def run(adapter, %Trace{} = trace, opts \\ []) do
@@ -181,6 +191,7 @@ defmodule AshQuint.Replay do
       init_action: Keyword.get(opts, :init_action, "Init"),
       mutate: Keyword.get(opts, :mutate),
       context: Keyword.get(opts, :context, []),
+      sandbox: nil,
       ref: make_ref(),
       timeouts: %{
         settle: Keyword.get(opts, :settle_timeout, 500),
@@ -190,6 +201,9 @@ defmodule AshQuint.Replay do
       }
     }
 
+    # The repo when this replay checked out a connection, else nil.
+    sandbox = Sandbox.checkout(Keyword.get(opts, :sandbox))
+    run = %{run | sandbox: sandbox}
     previous = Gate.put_current_replay(run.ref)
 
     try do
@@ -202,6 +216,8 @@ defmodule AshQuint.Replay do
       Gate.cancel_all(run.ref, %{})
       detach_telemetry(run.ref)
       Gate.put_current_replay(previous)
+      # After every op task has stopped: checking in rolls the trace back.
+      Sandbox.checkin(sandbox)
     end
   end
 
@@ -483,6 +499,8 @@ defmodule AshQuint.Replay do
       true ->
         # A serialized op runs through every gate to its result here.
         free = run.mutate == {:serialize, step.index}
+
+        call = Sandbox.allowing(run.sandbox, call)
 
         {ops, lines} =
           Ops.start(run.ref, timeouts(run, st, step), st.ops, step, op, call, opts, free)

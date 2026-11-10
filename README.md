@@ -849,6 +849,12 @@ staleness test, and the sensitivity check runs over its traces only. The
 `complete_timeout` and `gate_timeout`, in ms; see "Concurrent calls");
 any other key is a compile error.
 
+`sandbox: MyApp.Repo` gives each replay of the explore and sensitivity
+tests a sandbox transaction of its own (see
+[One transaction per trace](#one-transaction-per-trace-sandbox)); the
+trace tests replay in the template's sandbox as before. It must be a
+module name.
+
 If your model files aren't committed (they live in an ignored planning
 directory, say), set `on_missing_model: :skip`. The staleness test is then
 skipped when the model file is missing; the replays still run, since they
@@ -1232,7 +1238,10 @@ Each batch k is one `quint run` with seed `base + k`, the model's
 replayed in the test process, with the module's adapter, `adapter_opts`,
 `replay:` and `traces:` selection: a fresh trace the selection leaves out
 (by the same rule as the manifest's `concurrent`) is counted as skipped.
-All replays share the test's sandbox, as the sensitivity check's do. A
+All replays share the test's sandbox, as the sensitivity check's do,
+unless the module sets `sandbox:` (see
+[One transaction per trace](#one-transaction-per-trace-sandbox)), which
+a long session on Postgres needs. A
 passing session prints one line, and a second when the model's
 `witnesses:` have the same `main` as `random:`:
 
@@ -1380,7 +1389,8 @@ like any other candidate, with the batch's seed.
 
 Each round costs one `quint test` (about a second, mostly Node start-up)
 plus a replay of each passing run against the system, in the test's
-process and sandbox; only failures shrink, and a session stops after
+process and sandbox (with `sandbox:`, each in a transaction of its own);
+only failures shrink, and a session stops after
 `--failures` of them. The wrapper and its ITF files go in a fresh
 `_build/<env>/ash_quint/shrink/<model>_<random>/`, removed afterwards.
 
@@ -1509,6 +1519,76 @@ Postgres,
 and its module,
 [`test/ash_quint/postgres/race_pg_test.exs`](https://github.com/Torkan/ash_quint/blob/main/test/ash_quint/postgres/race_pg_test.exs).
 
+### One transaction per trace: `sandbox:`
+
+The explore test and the sensitivity test are single tests that replay
+many traces: every fresh trace of a session, or every trace and every
+mutant. In the usual `DataCase` they all run in the test's one sandbox
+transaction, so nothing a trace takes is released until the test ends:
+its rows and, with Postgres, every transaction-level lock it took
+(`pg_advisory_xact_lock`, row locks). Postgres keeps one lock table for
+the whole server, about `max_locks_per_transaction` × `max_connections`
+entries (6,400 with the defaults), shared by every database on it. A
+long enough explore run fills it, the next statement fails with
+`ERROR 53200 (out_of_memory) out of shared memory`, and explore reports
+that as a failure of the system, with a `promote:` line for a trace that
+fails for no reason of its own. Other test runs on the same server fail
+with the same error meanwhile.
+
+`sandbox:` gives each of those replays a transaction of its own:
+
+```elixir
+defmodule MyApp.AccessTraceTest do
+  use MyApp.DataCase, async: true
+
+  use AshQuint.Case,
+    model: :access,
+    adapter: MyApp.AccessTrace,
+    sensitivity: true,
+    explore: true,
+    sandbox: MyApp.Repo
+end
+```
+
+Each explore replay (fresh, confirmation and shrink replays) and each
+clean and mutant replay of the sensitivity check then checks out a
+sandbox connection (`Ecto.Adapters.SQL.Sandbox.checkout/1`) before
+`init/2` and checks it in after `finish/2`, on pass, failure or raise.
+Checking in rolls the trace back and releases its rows and locks. Op
+tasks are allowed on the replay's connection, in `:manual` and in shared
+mode. Other processes the system starts reach it through `$callers` in
+`:manual` mode, which is what the template clause below leaves; in
+shared mode (a template that starts a shared owner for these tests too)
+they would reach the shared owner's connection instead. The trace tests
+don't use the option: they replay in the template's sandbox, as before.
+
+The test process must have no connection of its own for this, so the
+case template has to skip its sandbox setup for the two tests:
+
+```elixir
+setup tags do
+  setup_sandbox(tags)
+  :ok
+end
+
+defp setup_sandbox(%{quint_explore: _}), do: :ok
+defp setup_sandbox(%{quint_sensitivity: _}), do: :ok
+
+defp setup_sandbox(tags) do
+  pid = Ecto.Adapters.SQL.Sandbox.start_owner!(MyApp.Repo, shared: not tags[:async])
+  on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+end
+```
+
+Without that clause, the test owns (or is allowed on) the template's
+connection, and the explore or sensitivity test fails at once, before
+its first replay, with a message naming the clause to add. A replay
+called directly (`AshQuint.Replay.run/3` with `sandbox:`) from a process
+that already has a connection takes none and gives none back. The
+pool's ownership timeout then applies to one trace, not to the whole
+session. `sandbox:` needs `ecto_sql`; without it, ash_quint calls no
+Ecto function.
+
 ## CI
 
 - The default test suite needs neither Node nor Quint: run
@@ -1545,6 +1625,9 @@ and its module,
   use the test's connection and its one transaction, so races inside
   transactions (row locks, isolation anomalies) need real connections
   (see [Databases](#databases)).
+- The sandbox transaction a replay checks out with `sandbox:` is rolled
+  back when the replay ends, but checking in returns before the rollback
+  has run: the next replay may briefly see the previous one's locks.
 - `random:` takes no invariants to check; any non-zero exit of
   `quint run` fails generation.
 - Model integers are limited to the signed 64-bit range by Quint's Rust

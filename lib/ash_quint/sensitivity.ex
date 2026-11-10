@@ -64,7 +64,8 @@ defmodule AshQuint.Sensitivity do
   without postconditions get only the mutants above.
 
   Every mutant replays with a fresh `init/2`, so fresh `AshQuint.Names`, in
-  the caller's process and sandbox, one after another. The adapter's
+  the caller's process and sandbox (or, with `:sandbox`, each in a
+  sandbox transaction of its own), one after another. The adapter's
   `project/1` must therefore be scoped to its own trace (see
   `AshQuint.Adapter`), and an adapter that holds resources should release
   them in `finish/2`, which every clean and mutant replay calls. A mutant
@@ -73,7 +74,7 @@ defmodule AshQuint.Sensitivity do
   `use AshQuint.Case, sensitivity: true` runs the check as a test.
   """
 
-  alias AshQuint.{Adapter, Replay, Step, Trace}
+  alias AshQuint.{Adapter, Replay, Sandbox, Step, Trace}
 
   @type mutant ::
           {:perturb, trace :: String.t(), index :: pos_integer(), key :: term()}
@@ -93,7 +94,12 @@ defmodule AshQuint.Sensitivity do
   @doc """
   Replays `traces` and their mutants through `adapter`.
 
-  `opts` are `AshQuint.Replay.run/3`'s, without `:mutate`. Returns the
+  `opts` are `AshQuint.Replay.run/3`'s, without `:mutate`. With
+  `:sandbox`, each clean and mutant replay runs on a sandbox connection of
+  its own, and the calling process must have none: one it owns or is
+  allowed on raises `ArgumentError` before the first replay, naming the
+  case template clause that skips the sandbox for `quint_sensitivity:`.
+  Returns the
   mutants that survived, the keys, calls, interleavings and model
   variables that are untested, and the ones that had a mutant (`tested`;
   an interleaving only when a serialization was detected, a call dropped
@@ -110,6 +116,7 @@ defmodule AshQuint.Sensitivity do
   @spec check(module(), [Trace.t()], [Replay.option()]) :: result()
   def check(adapter, traces, opts \\ []) do
     opts = Keyword.delete(opts, :mutate)
+    Sandbox.ensure_unowned!(opts[:sandbox], "the sensitivity check", :quint_sensitivity)
     reports = Enum.map(traces, &{&1, clean!(adapter, &1, opts)})
 
     perturbs = first_changes(reports, :key)

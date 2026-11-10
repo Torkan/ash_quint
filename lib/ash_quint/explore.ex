@@ -69,6 +69,7 @@ defmodule AshQuint.Explore do
   alias AshQuint.ITF
   alias AshQuint.Manifest
   alias AshQuint.Replay
+  alias AshQuint.Sandbox
   alias AshQuint.Shrink
 
   @type option ::
@@ -80,6 +81,7 @@ defmodule AshQuint.Explore do
           | {:traces, :all | :sequential | :concurrent}
           | {:max_steps, pos_integer() | nil}
           | {:batch, pos_integer()}
+          | {:sandbox, module() | nil}
 
   @type settings :: %{
           runs: pos_integer(),
@@ -167,8 +169,18 @@ defmodule AshQuint.Explore do
   Options (`t:option/0`): `:model` and `:adapter` (required), `:config`
   (default `"ash_quint.exs"`, read with `AshQuint.Config.load!/1`),
   `:adapter_opts` and `:replay` (as in `AshQuint.Case`), `:traces`
-  (default `:all`), `:max_steps` (default the model's `random:` one) and
-  `:batch` (default 20).
+  (default `:all`), `:max_steps` (default the model's `random:` one),
+  `:batch` (default 20) and `:sandbox` (default `nil`).
+
+  With `:sandbox` (an Ecto repo), every replay of the session (fresh,
+  confirmation and shrink replays) checks out a sandbox connection of its
+  own and checks it in when it ends (`AshQuint.Replay.run/3`'s
+  `:sandbox`), so each trace's rows and locks are released before the
+  next one starts. The calling process must have no sandbox connection of
+  its own: one it owns or is allowed on would hold the whole session in
+  one transaction, so the session raises `ArgumentError` before its first
+  batch, naming the case template clause that skips the sandbox for
+  `quint_explore:`.
 
   `run_opts`, for tests:
 
@@ -188,6 +200,12 @@ defmodule AshQuint.Explore do
     unless model.random do
       raise ArgumentError, "explore needs random: for #{inspect(model.name)} in ash_quint.exs"
     end
+
+    Sandbox.ensure_unowned!(
+      Keyword.get(opts, :sandbox),
+      "explore of #{inspect(model.name)}",
+      :quint_explore
+    )
 
     now = Keyword.get(run_opts, :now, fn -> System.monotonic_time(:millisecond) end)
 
@@ -253,7 +271,8 @@ defmodule AshQuint.Explore do
 
   defp replay_opts(model, opts) do
     Model.replay_opts(model) ++
-      [adapter_opts: Keyword.get(opts, :adapter_opts, [])] ++ Keyword.get(opts, :replay, [])
+      [adapter_opts: Keyword.get(opts, :adapter_opts, []), sandbox: Keyword.get(opts, :sandbox)] ++
+      Keyword.get(opts, :replay, [])
   end
 
   defp batches(session, report, k) do

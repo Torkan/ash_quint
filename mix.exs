@@ -50,6 +50,7 @@ defmodule AshQuint.MixProject do
       {:jason, "~> 1.4"},
       {:ash, "~> 3.0", optional: true},
       {:telemetry, "~> 1.0", optional: true},
+      {:ecto_sql, "~> 3.10", optional: true},
       {:ash_postgres, "~> 2.0", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},

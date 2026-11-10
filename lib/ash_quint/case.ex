@@ -128,6 +128,16 @@ defmodule AshQuint.Case do
       the model's `random:` `max_steps`, else Quint's), `batch` the traces
       per `quint run` (default 20); both must be literal positive
       integers. `true` is `[]`. The model needs `random:`. Default `false`.
+    * `:sandbox` — an Ecto repo, such as `MyApp.Repo`: each replay of the
+      explore and sensitivity tests runs on a sandbox connection of its
+      own, checked out before `init/2` and checked in after `finish/2`
+      (`AshQuint.Replay.run/3`'s `:sandbox`), so each trace releases its
+      rows and locks when it ends instead of when the test does. The case
+      template must then skip its sandbox setup for tests tagged
+      `quint_explore:` and `quint_sensitivity:`; a test that already has a
+      connection fails at once, saying so. The trace tests are unaffected:
+      they replay in the template's sandbox. Needs `ecto_sql`. Default
+      `nil`.
     * `:replay` — `AshQuint.Replay.run/3` timeouts, in ms:
       `[settle_timeout: …, step_timeout: …, complete_timeout: …,
       gate_timeout: …]`. Any other key is a compile error. Default `[]`
@@ -148,6 +158,7 @@ defmodule AshQuint.Case do
     selection = traces!(Keyword.get(opts, :traces, :all), env)
     replay = replay!(Keyword.get(opts, :replay, []), env)
     explore = explore!(Keyword.get(opts, :explore, false), env)
+    sandbox = sandbox!(Keyword.get(opts, :sandbox), env)
     config_path = Keyword.get(opts, :config, "ash_quint.exs")
 
     config =
@@ -184,6 +195,7 @@ defmodule AshQuint.Case do
       allow_untested: allow_untested,
       replay: replay,
       explore: explore,
+      sandbox: sandbox,
       config_path: config_path,
       selection: selection
     })
@@ -260,6 +272,15 @@ defmodule AshQuint.Case do
       env,
       "replay must be a keyword list of #{@replay_shape}, got #{Macro.to_string(other)}"
     )
+  end
+
+  # nil or the repo, as the caller's alias AST.
+  defp sandbox!(nil, _env), do: nil
+  defp sandbox!({:__aliases__, _meta, _parts} = repo, _env), do: repo
+  defp sandbox!(repo, _env) when is_atom(repo) and repo not in [true, false], do: repo
+
+  defp sandbox!(other, env) do
+    compile_error!(env, "sandbox must be a repo module, got #{Macro.to_string(other)}")
   end
 
   @explore_keys [:max_steps, :batch]
@@ -472,7 +493,7 @@ defmodule AshQuint.Case do
               unquote(model),
               unquote(setup.adapter),
               unquote(traces),
-              unquote(replay_opts),
+              unquote(replay_opts ++ [sandbox: setup.sandbox]),
               unquote(setup.allow_untested)
             )
           end
@@ -526,7 +547,8 @@ defmodule AshQuint.Case do
         config: setup.config_path,
         adapter_opts: setup.adapter_opts,
         replay: setup.replay,
-        traces: setup.selection
+        traces: setup.selection,
+        sandbox: setup.sandbox
       ] ++ setup.explore
 
     quote do

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `sandbox: MyApp.Repo` (`AshQuint.Case`, and `:sandbox` for
+  `AshQuint.Replay.run/3`, `AshQuint.Explore.run/3` and
+  `AshQuint.Sensitivity.check/3`) gives each replay of the explore and
+  sensitivity tests a sandbox connection of its own: checked out before
+  `init/2` when the process has none, checked in after `finish/2` on
+  every path, with op tasks allowed on it. Each trace then releases its
+  rows and locks when it ends, so a long explore run on Postgres no longer
+  fills the server's lock table (`out of shared memory`) and reports it
+  as a regression. An explore or sensitivity test that already has a
+  connection fails at once, naming the case template clause to add.
+  `ecto_sql` is a new optional dependency. The README's "Databases" has
+  a section "One transaction per trace".
 - Shrinking: `shrink: [import: "counter(CAP = 5)"]` names what the
   wrapper imports from the model file, for a `random: [main: …]` that is
   an instance module (`import counter(CAP = 5).*`), whose actions an

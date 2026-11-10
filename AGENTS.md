@@ -54,7 +54,9 @@ $Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10
   behaviour (`project/1` optional; `postconditions/0`, checked after the
   state comparison and the invariants) and the replay;
   `AshQuint.Replay.Ops` (internal) — the ops in flight during a concurrent
-  replay; `AshQuint.Diff` (internal) — the
+  replay; `AshQuint.Sandbox` (internal) — the replay's `sandbox:` (a
+  connection per replay; calls `Ecto.Adapters.SQL.Sandbox` only when set,
+  `ecto_sql` being an optional dependency); `AshQuint.Diff` (internal) — the
   differing entries of a long key mismatch.
 - `AshQuint.Gate` — gates (`checkpoint/1`, `put_info/2`,
   `current_replay/0`) and the op-task primitives;
@@ -140,8 +142,12 @@ $Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10
   `test/support/postgres/` — the Postgres test setup: `PgDomain`,
   `PgRaceCounter` (the race resource over Postgres), `RacePgAdapter` (the
   race example unboxed), `PgOpsAdapter` (per-op calls, for the sandbox
-  tests) and `DataCase` (`async: true` for the shared sandbox,
-  `unboxed: true` for real connections). Tests in `test/ash_quint/postgres/`.
+  tests), `SandboxHelpers` (raw SQL on `race_counters`) and `DataCase`
+  (`async: true` for the shared sandbox, `unboxed: true` for real
+  connections). Tests in `test/ash_quint/postgres/`, the `sandbox:`
+  option's in `sandbox_option_test.exs`.
+- `test/support/fixture_runner.ex` — a Quint runner for explore sessions
+  that writes fixture traces instead of running Quint.
 - `usage-rules.md`, `usage-rules/modeling.md`, `usage-rules/adapters.md` —
   the packaged usage rules (`ash_quint`, `ash_quint:modeling`,
   `ash_quint:adapters`), checked by `mix usage_rules.validate`; keep them
