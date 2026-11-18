@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Breaking:** ash_quint is inert unless enabled with
+  `config :ash_quint, enabled: true` (read at compile time; usually in
+  `config/test.exs`). Where it isn't, `AshQuint.Gate.checkpoint/1` and
+  `put_info/2` return `:ok` without a lookup, the Ash change
+  `AshQuint.Ash.Gate` adds no hook, the application starts no gate table,
+  and `AshQuint.Replay.run/3` (so every `AshQuint.Case`, sensitivity and
+  explore replay) and `AshQuint.Gate.Telemetry.attach/2` raise
+  ``ash_quint is disabled in this environment: add `config :ash_quint, enabled: true` to config/test.exs``.
+  Gates can now stay in resources and app code in every environment, with
+  no `Mix.env()` guard. The README recommends depending on ash_quint in
+  every environment, and `only: [:dev, :test]` only when every gate lives
+  in test-only code. `AshQuint.enabled?/0` reports the setting. Existing
+  suites need the config line.
+- Docs: the README opens with a short primer on Quint, what ash_quint
+  adds and why, and how to use it for new features and for existing
+  code; each reference section now starts with why its feature exists.
+  The headings "Configuration", "Generating traces", "Coverage" and
+  "Exploring" no longer name their file or task.
 - `sandbox: MyApp.Repo` (`AshQuint.Case`, and `:sandbox` for
   `AshQuint.Replay.run/3`, `AshQuint.Explore.run/3` and
   `AshQuint.Sensitivity.check/3`) gives each replay of the explore and
