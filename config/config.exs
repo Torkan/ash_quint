@@ -5,6 +5,10 @@ import Config
 config :ash, default_string_length_count: :codepoints
 
 if config_env() == :test do
+  # Gates, replays and the gate table work only where this is set; in dev
+  # (and in projects that don't set it) ash_quint is inert.
+  config :ash_quint, enabled: true
+
   # Ash logs every action at :debug.
   config :logger, level: :warning
 

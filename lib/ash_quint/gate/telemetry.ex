@@ -62,9 +62,13 @@ if Code.ensure_loaded?(:telemetry) do
       * `:replay` — the replay whose ops are gated. Default
         `AshQuint.Gate.current_replay/0`; raises `ArgumentError` when there
         is none.
+
+    Raises where ash_quint isn't enabled (`AshQuint.enabled?/0`).
     """
     @spec attach([[atom()]], [option()]) :: handler_id()
     def attach(events, opts \\ []) do
+      AshQuint.ensure_enabled!()
+
       ref =
         Keyword.get_lazy(opts, :replay, &Gate.current_replay/0) ||
           raise ArgumentError,

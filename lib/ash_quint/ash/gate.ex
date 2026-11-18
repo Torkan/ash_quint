@@ -8,7 +8,9 @@ if Code.ensure_loaded?(Ash) do
         change {AshQuint.Ash.Gate, at: :after_read}
 
     In an op task of a replay, the action stops at the gate `at:` until the
-    replay releases it; anywhere else the change does nothing.
+    replay releases it; anywhere else the change does nothing. Where
+    ash_quint isn't enabled (`AshQuint.enabled?/0`), it adds no hook at
+    all, so it can stay in the action in every environment.
 
     Where the action stops:
 
@@ -19,9 +21,9 @@ if Code.ensure_loaded?(Ash) do
         before the transaction, before the data layer computes the atomic
         values from the row as it is when it writes.
 
-    Only available when the project depends on `ash`. ash_quint is a test
-    dependency, so add the change to test-only code: a resource compiled
-    for test, or under `if Mix.env() == :test`.
+    Only available when the project depends on `ash`. The action calls the
+    change at run time, so ash_quint must be a dependency in every
+    environment the resource runs in.
 
     ## Options
 
@@ -29,6 +31,8 @@ if Code.ensure_loaded?(Ash) do
         it in `{:advance, op, ctx, at: :after_read}`.
     """
     use Ash.Resource.Change
+
+    @enabled AshQuint.enabled?()
 
     @impl true
     @spec init(keyword()) :: {:ok, keyword()} | {:error, String.t()}
@@ -48,13 +52,17 @@ if Code.ensure_loaded?(Ash) do
     @impl true
     @spec change(Ash.Changeset.t(), keyword(), Ash.Resource.Change.Context.t()) ::
             Ash.Changeset.t()
-    def change(changeset, opts, _context) do
-      at = Keyword.fetch!(opts, :at)
+    if @enabled do
+      def change(changeset, opts, _context) do
+        at = Keyword.fetch!(opts, :at)
 
-      Ash.Changeset.before_action(changeset, fn changeset ->
-        AshQuint.Gate.checkpoint(at)
-        changeset
-      end)
+        Ash.Changeset.before_action(changeset, fn changeset ->
+          AshQuint.Gate.checkpoint(at)
+          changeset
+        end)
+      end
+    else
+      def change(changeset, _opts, _context), do: changeset
     end
 
     @impl true

@@ -139,6 +139,10 @@ defmodule AshQuint.Replay do
   `finish/2` itself propagates, except while an adapter exception is already
   propagating: that one is kept.
 
+  Raises before calling the adapter where ash_quint isn't enabled
+  (`AshQuint.enabled?/0`): gates are no-ops there, so no interleaving
+  could be reproduced.
+
   ## Options
 
     * `:model` — the model name, for failure messages.
@@ -183,6 +187,8 @@ defmodule AshQuint.Replay do
   """
   @spec run(module(), Trace.t(), [option()]) :: {:ok, report()} | {:error, failure()}
   def run(adapter, %Trace{} = trace, opts \\ []) do
+    AshQuint.ensure_enabled!()
+
     run = %{
       adapter: adapter,
       trace: trace,

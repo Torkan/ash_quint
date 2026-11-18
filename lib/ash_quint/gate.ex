@@ -18,8 +18,10 @@ defmodule AshQuint.Gate do
   system's actions call, or in a test implementation of a behaviour the
   system already calls (a mail client, a payment gateway). Outside an op
   task, `checkpoint/1` returns `:ok` at once, after an ETS lookup per pid in
-  `[self() | $callers]`, so it can stay in code compiled for test. Gate
-  names are the adapter's own atoms (or tuples such as `{:query, 1}`).
+  `[self() | $callers]`; where ash_quint isn't enabled
+  (`AshQuint.enabled?/0`), it returns `:ok` without one. So gates can stay
+  in the system's code in every environment. Gate names are the adapter's
+  own atoms (or tuples such as `{:query, 1}`).
 
   A gate that isn't released within the replay's `:gate_timeout` returns
   anyway, and the replay fails at the step it is on. When the replay
@@ -44,6 +46,10 @@ defmodule AshQuint.Gate do
 
   @current_replay :ash_quint_replay
 
+  # Disabled (see AshQuint.enabled?/0), checkpoint/1 and put_info/2 return
+  # :ok without looking at the gate table.
+  @enabled AshQuint.enabled?()
+
   @typedoc "A gate name: the adapter's own atom (or a tuple such as `{:query, 1}`)."
   @type name :: atom() | tuple()
 
@@ -57,12 +63,17 @@ defmodule AshQuint.Gate do
   it returns `:ok` at once. It never raises: a name that isn't an atom or a
   tuple, or a missing table, returns `:ok`. When the replay cancels the op,
   it exits the calling process with `{:shutdown, :ash_quint_cancelled}`.
+
+  Where ash_quint isn't enabled (`AshQuint.enabled?/0`), it returns `:ok`
+  without any lookup.
   """
   @spec checkpoint(name()) :: :ok
-  def checkpoint(name) when is_atom(name) or is_tuple(name) do
-    case gate(name, :any) do
-      :cancel -> exit({:shutdown, :ash_quint_cancelled})
-      :ok -> :ok
+  if @enabled do
+    def checkpoint(name) when is_atom(name) or is_tuple(name) do
+      case gate(name, :any) do
+        :cancel -> exit({:shutdown, :ash_quint_cancelled})
+        :ok -> :ok
+      end
     end
   end
 
@@ -75,21 +86,25 @@ defmodule AshQuint.Gate do
   The replay passes the info to the adapter's `blocked?/2`, so a call can
   say what it may wait on: the Postgres backend of its connection, say
   (`AshQuint.Ash.pg_backend_pid/1` does that). Like `checkpoint/1`, it
-  finds the op through `$callers`, does nothing outside an op task and
-  never raises.
+  finds the op through `$callers`, does nothing outside an op task (or
+  where ash_quint isn't enabled) and never raises.
   """
   @spec put_info(term(), term()) :: :ok
-  def put_info(key, value) do
-    case lookup(Table.name(), [self() | callers()]) do
-      {pid, _replay, _ref, _op, _mode, _timeout, info} ->
-        :ets.update_element(Table.name(), pid, {7, Map.put(info, key, value)})
-        :ok
+  if @enabled do
+    def put_info(key, value) do
+      case lookup(Table.name(), [self() | callers()]) do
+        {pid, _replay, _ref, _op, _mode, _timeout, info} ->
+          :ets.update_element(Table.name(), pid, {7, Map.put(info, key, value)})
+          :ok
 
-      nil ->
-        :ok
+        nil ->
+          :ok
+      end
+    catch
+      _kind, _reason -> :ok
     end
-  catch
-    _kind, _reason -> :ok
+  else
+    def put_info(_key, _value), do: :ok
   end
 
   @doc false

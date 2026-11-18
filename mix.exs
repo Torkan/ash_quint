@@ -24,6 +24,9 @@ defmodule AshQuint.MixProject do
   def cli do
     [
       preferred_envs: [
+        # As in CI: ash_quint is enabled only in test, and in dev dialyzer
+        # rightly finds that replays always raise.
+        dialyzer: :test,
         "test.generate_migrations": :test,
         "test.check_migrations": :test,
         "test.create": :test,

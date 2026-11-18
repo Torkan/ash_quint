@@ -61,9 +61,13 @@ Sub-rules:
   ash_quint.gen`, `mix ash_quint.explore` and `mix ash_quint.promote` run
   Quint or write traces. Exclude `:quint_explore` in
   `test/test_helper.exs` (`ExUnit.start(exclude: [:quint_explore])`).
-- Depend on ash_quint with `only: [:dev, :test]`: with `only: :test`,
-  `mix usage_rules.sync` (which runs in dev) doesn't find these rules. Its
-  Mix tasks run under `MIX_ENV=test` (or set `preferred_envs` in
-  `mix.exs`).
+- Depend on ash_quint in every environment (`{:ash_quint, "~> 0.1"}`) and
+  enable it only in test, with `config :ash_quint, enabled: true` in
+  `config/test.exs`. Elsewhere gates are no-ops, the application starts
+  nothing and replays raise, so gates can stay in resources and app code.
+  A project whose gates all live in test-only code can depend with
+  `only: [:dev, :test]` instead (not `only: :test`: `mix usage_rules.sync`
+  runs in dev and wouldn't find these rules). Its Mix tasks run under
+  `MIX_ENV=test` (or set `preferred_envs` in `mix.exs`).
 - Model names, action names, picks and variable names stay strings in
   Elixir; don't turn trace data into atoms.

@@ -8,6 +8,19 @@ defmodule AshQuint do
   pinned Quint by `mix ash_quint.gen` and committed, so the test suite needs
   neither Node nor Quint. The README is the guide.
 
+  ## Enabling
+
+  ash_quint is inert unless the environment enables it, usually in
+  `config/test.exs`:
+
+      config :ash_quint, enabled: true
+
+  Elsewhere (dev, prod) gates (`AshQuint.Gate.checkpoint/1`, the Ash change
+  `AshQuint.Ash.Gate`) compile to no-ops, the application starts nothing,
+  and replays raise. So gates can stay in the system's code in every
+  environment. The setting is read at compile time; Mix recompiles
+  ash_quint when it changes.
+
   ## Modules
 
   Writing tests:
@@ -46,4 +59,27 @@ defmodule AshQuint do
       `AshQuint.Scaffold` — an adapter skeleton and its test module, from
       the model interface in the manifest.
   """
+
+  @enabled Application.compile_env(:ash_quint, :enabled, false) == true
+
+  @doc """
+  Whether ash_quint is enabled in this environment
+  (`config :ash_quint, enabled: true`, read at compile time). See
+  "Enabling" above.
+  """
+  @spec enabled?() :: boolean()
+  def enabled?, do: @enabled
+
+  @doc false
+  # Raises unless ash_quint is enabled: replays and telemetry gates refuse
+  # to run where gates are no-ops.
+  @spec ensure_enabled!() :: :ok | no_return()
+  if @enabled do
+    def ensure_enabled!, do: :ok
+  else
+    def ensure_enabled! do
+      raise "ash_quint is disabled in this environment: " <>
+              "add `config :ash_quint, enabled: true` to config/test.exs"
+    end
+  end
 end

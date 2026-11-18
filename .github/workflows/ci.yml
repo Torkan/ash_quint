@@ -48,6 +48,11 @@ jobs:
         if: matrix.latest
         env:
           MIX_ENV: dev
+      # ash_quint is enabled only in test: in dev it must be inert.
+      - run: mix run scripts/check_disabled.exs
+        if: matrix.latest
+        env:
+          MIX_ENV: dev
       # usage_rules is a dev-only dependency and needs Elixir ~> 1.18.
       - run: mix usage_rules.validate usage-rules.md usage-rules/*.md
         if: matrix.latest
@@ -145,3 +150,5 @@ jobs:
           test ! -e _build/dev/lib/ash_quint/ebin/Elixir.AshQuint.Ash.beam
           test ! -e _build/dev/lib/ash_quint/ebin/Elixir.AshQuint.Ash.Gate.beam
           test ! -e _build/dev/lib/ash_quint/ebin/Elixir.AshQuint.Gate.Telemetry.beam
+          # Not enabled, ash_quint is inert (the Ash and telemetry checks skip).
+          mix run "$ASH_QUINT/scripts/check_disabled.exs"

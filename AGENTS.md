@@ -14,6 +14,7 @@ mix test --warnings-as-errors   # the adapter check warns while test files compi
 mix dialyzer
 mix docs            # no warnings
 mix usage_rules.validate usage-rules.md usage-rules/*.md
+MIX_ENV=dev mix run scripts/check_disabled.exs   # ash_quint inert where not enabled
 ```
 
 Also, when traces, the example or packaging change:
@@ -48,6 +49,12 @@ $Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10
 ## Module map
 
 - `AshQuint` (`lib/ash_quint.ex`) — overview; the README is the user guide.
+  `enabled?/0` is `config :ash_quint, enabled: true`, read at compile time
+  (`config/config.exs` sets it for test only). Not enabled, gates and the
+  Ash change compile to no-ops, the application starts no gate table and
+  replays and telemetry attach raise (`ensure_enabled!/0`).
+  `scripts/check_disabled.exs` checks that side, in a build without the
+  setting; `test/ash_quint/enabled_test.exs` the enabled one.
 - `AshQuint.ITF`, `AshQuint.Trace`, `AshQuint.Step` — ITF decoding, traces,
   steps.
 - `AshQuint.Adapter`, `AshQuint.Names`, `AshQuint.Replay` — the adapter
@@ -61,8 +68,9 @@ $Q run models/practices/model.qnt --main=shrink6 --max-steps=30 --max-samples=10
 - `AshQuint.Gate` — gates (`checkpoint/1`, `put_info/2`,
   `current_replay/0`) and the op-task primitives;
   `AshQuint.Application` starts `AshQuint.Gate.Table`, the ETS table that
-  registers op tasks. `AshQuint.Gate.Telemetry` — telemetry gates scoped to
-  a replay, compiled only when `:telemetry` is loaded (optional dep).
+  registers op tasks (only when enabled). `AshQuint.Gate.Telemetry` —
+  telemetry gates scoped to a replay, compiled only when `:telemetry` is
+  loaded (optional dep).
 - `AshQuint.Sensitivity` — mutants (perturbed key, dropped call or op
   start/completion, serialized op) and untested keys, actions,
   interleavings and unprojected model variables; `overlaps/1` over a

@@ -49,7 +49,8 @@ action binding its picks and a `project/1` with every model variable.
 - Place gates where the race happens: `AshQuint.Gate.checkpoint/1` in the
   code path, the Ash change `AshQuint.Ash.Gate`, or
   `AshQuint.Gate.Telemetry.attach/1`. A race window without a gate may
-  pass by luck.
+  pass by luck. Gates need no `Mix.env()` guard: they are no-ops wherever
+  ash_quint isn't enabled.
 - Op tasks are other processes: use tables and sandboxes they can see.
   Races inside a transaction need real database connections
   (`async: false`), with `finish/2` deleting what the replay committed.
